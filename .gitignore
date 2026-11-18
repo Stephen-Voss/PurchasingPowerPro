@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Production build output (published separately via gh-pages)
+dist/
+dist-ssr/
+*.local
+
+# Environment variables & secret API keys (NEVER COMMIT)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Editor & OS files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
