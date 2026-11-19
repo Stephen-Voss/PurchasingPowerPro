@@ -6,7 +6,6 @@ const STORAGE_KEY = "cost_tracker_api_keys";
 export const getStoredApiKeys = () => {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-    // Only read import.meta.env in local development; public GitHub Pages builds use browser localStorage only
     const isDev = import.meta.env.DEV;
     return {
       apverve: (
@@ -24,22 +23,55 @@ export const getStoredApiKeys = () => {
         (isDev ? import.meta.env.VITE_BEA_API_KEY : "") ||
         ""
       ).trim(),
+      adzunaAppId: (
+        saved.adzunaAppId ||
+        (isDev ? import.meta.env.VITE_ADZUNA_APP_ID : "") ||
+        ""
+      ).trim(),
+      adzunaAppKey: (
+        saved.adzunaAppKey ||
+        (isDev ? import.meta.env.VITE_ADZUNA_APP_KEY : "") ||
+        ""
+      ).trim(),
+      careerOneStopUserId: (
+        saved.careerOneStopUserId ||
+        (isDev ? import.meta.env.VITE_CAREERONESTOP_USER_ID : "") ||
+        ""
+      ).trim(),
+      careerOneStopToken: (
+        saved.careerOneStopToken ||
+        (isDev ? import.meta.env.VITE_CAREERONESTOP_TOKEN : "") ||
+        ""
+      ).trim(),
+      blsApiKey: (
+        saved.blsApiKey ||
+        (isDev ? import.meta.env.VITE_BLS_API_KEY : "") ||
+        ""
+      ).trim(),
     };
   } catch {
-    return { apverve: "", apininjas: "", bea: "" };
+    return {
+      apverve: "",
+      apininjas: "",
+      bea: "",
+      adzunaAppId: "",
+      adzunaAppKey: "",
+      careerOneStopUserId: "",
+      careerOneStopToken: "",
+      blsApiKey: "",
+    };
   }
 };
 
 export const saveApiKeys = (keys) => {
   try {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        apverve: (keys.apverve || "").trim(),
-        apininjas: (keys.apininjas || "").trim(),
-        bea: (keys.bea || "").trim(),
-      }),
+    const cleaned = Object.fromEntries(
+      Object.entries(keys || {}).map(([k, v]) => [
+        k,
+        typeof v === "string" ? v.trim() : v,
+      ]),
     );
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
   } catch (err) {
     console.warn("Unable to save API keys to localStorage:", err);
   }
@@ -55,12 +87,18 @@ export const clearStoredApiKeys = () => {
 
 export const hasCustomApiKeys = (keysObj) => {
   if (!keysObj) return false;
-  return Boolean(keysObj.apverve || keysObj.apininjas || keysObj.bea);
+  return Boolean(
+    keysObj.apverve ||
+    keysObj.apininjas ||
+    keysObj.bea ||
+    (keysObj.adzunaAppId && keysObj.adzunaAppKey) ||
+    (keysObj.careerOneStopUserId && keysObj.careerOneStopToken) ||
+    keysObj.blsApiKey,
+  );
 };
 
 /**
  * 1. Free Keyless U.S. Census Bureau ACS API for Dynamic Median Wages & Incomes by State
- * Works on GitHub Pages with zero API key required and caches in localStorage.
  */
 export async function fetchLiveCensusWagesByState() {
   const cacheKey = "census_acs_state_wages_v2";
@@ -228,7 +266,290 @@ export async function fetchAPINinjasTax(
 }
 
 /**
- * 5. OpenStreetMap Nominatim Geocoding (Keyless Public API)
+ * 5. Adzuna Job Aggregator API (Vacancies, Salary Histogram, Historical Trend, Top Companies)
+ * Docs: https://developer.adzuna.com/docs/search
+ */
+export async function fetchAdzunaCareerData(
+  cityObj,
+  careerProfile,
+  appId,
+  appKey,
+) {
+  if (!appId || !appKey) return null;
+  const countrySlug = cityObj.country === "GB" ? "gb" : "us";
+  const whereQuery = cityObj.isInternational
+    ? cityObj.city
+    : `${cityObj.city}, ${cityObj.state}`;
+  const cacheKey = `adzuna_${countrySlug}_${cityObj.id}_${careerProfile.id}`;
+  const cached = cacheService.get(cacheKey);
+  if (cached) return cached;
+
+  const baseParams = `app_id=${encodeURIComponent(appId)}&app_key=${encodeURIComponent(
+    appKey,
+  )}&what=${encodeURIComponent(careerProfile.title)}&where=${encodeURIComponent(whereQuery)}`;
+
+  try {
+    const [searchRes, histRes, trendRes, topCoRes] = await Promise.allSettled([
+      fetch(
+        `https://api.adzuna.com/v1/api/jobs/${countrySlug}/search/1?${baseParams}&results_per_page=10`,
+      ),
+      fetch(
+        `https://api.adzuna.com/v1/api/jobs/${countrySlug}/histogram?${baseParams}`,
+      ),
+      fetch(
+        `https://api.adzuna.com/v1/api/jobs/${countrySlug}/history?${baseParams}`,
+      ),
+      fetch(
+        `https://api.adzuna.com/v1/api/jobs/${countrySlug}/top_companies?${baseParams}`,
+      ),
+    ]);
+
+    const result = { source: "Adzuna Live API" };
+    let hasAny = false;
+
+    if (searchRes.status === "fulfilled" && searchRes.value.ok) {
+      const sJson = await searchRes.value.json();
+      if (typeof sJson.count === "number") {
+        result.activeVacancies = sJson.count;
+        hasAny = true;
+      }
+      if (typeof sJson.mean === "number" && sJson.mean > 0) {
+        result.roleMedianSalary = Math.round(sJson.mean);
+        hasAny = true;
+      }
+    }
+
+    if (histRes.status === "fulfilled" && histRes.value.ok) {
+      const hJson = await histRes.value.json();
+      if (hJson?.histogram && typeof hJson.histogram === "object") {
+        const sortedEntries = Object.entries(hJson.histogram)
+          .map(([salaryKey, count]) => ({
+            low: Number(salaryKey),
+            high: Number(salaryKey) + 10000,
+            rangeLabel: `$${Math.round(Number(salaryKey) / 1000)}k–$${Math.round(
+              (Number(salaryKey) + 10000) / 1000,
+            )}k`,
+            jobCount: Number(count) || 0,
+          }))
+          .filter((b) => !Number.isNaN(b.low) && b.jobCount > 0)
+          .slice(0, 8);
+        if (sortedEntries.length > 0) {
+          result.salaryHistogram = sortedEntries;
+          hasAny = true;
+        }
+      }
+    }
+
+    if (trendRes.status === "fulfilled" && trendRes.value.ok) {
+      const tJson = await trendRes.value.json();
+      if (tJson?.month && typeof tJson.month === "object") {
+        const points = Object.entries(tJson.month)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .slice(-6)
+          .map(([monthKey, avgSal]) => ({
+            year: monthKey,
+            medianSalary: Math.round(Number(avgSal) || 0),
+          }))
+          .filter((p) => p.medianSalary > 0);
+        if (points.length > 0) {
+          result.historicalSalaryTrend = points;
+          hasAny = true;
+        }
+      }
+    }
+
+    if (topCoRes.status === "fulfilled" && topCoRes.value.ok) {
+      const cJson = await topCoRes.value.json();
+      if (cJson?.leaderboard && Array.isArray(cJson.leaderboard)) {
+        result.topCompanies = cJson.leaderboard.slice(0, 5).map((item) => ({
+          name: item?.canonical_name || item?.name || "Hiring Employer",
+          openRoles: Number(item?.count) || 5,
+        }));
+        hasAny = true;
+      }
+    }
+
+    if (!hasAny) return null;
+    cacheService.set(cacheKey, result);
+    return result;
+  } catch (err) {
+    console.warn(`Adzuna fallback for ${cityObj.city}:`, err.message);
+    return null;
+  }
+}
+
+/**
+ * 6. CareerOneStop LMI API (Metro Employment, Openings, Wage Percentiles, Unemployment, Skills)
+ * Docs: https://www.careeronestop.org/Developers/WebAPI/web-api.aspx
+ */
+export async function fetchCareerOneStopData(
+  cityObj,
+  careerProfile,
+  userId,
+  token,
+) {
+  if (!userId || !token || cityObj.isInternational) return null;
+  const socClean = careerProfile.socCode.replace("-", "");
+  const locationQuery = encodeURIComponent(`${cityObj.city}, ${cityObj.state}`);
+  const cacheKey = `cos_lmi_${cityObj.id}_${socClean}`;
+  const cached = cacheService.get(cacheKey);
+  if (cached) return cached;
+
+  try {
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+    };
+    const [occRes, unempRes] = await Promise.allSettled([
+      fetch(
+        `https://api.careeronestop.org/v1/occupation/${encodeURIComponent(
+          userId,
+        )}/${socClean}/${locationQuery}?includeWage=true&includeProjection=true&includeSkills=true`,
+        { headers },
+      ),
+      fetch(
+        `https://api.careeronestop.org/v1/launemployment/${encodeURIComponent(
+          userId,
+        )}/${locationQuery}`,
+        { headers },
+      ),
+    ]);
+
+    const result = { source: "CareerOneStop Live API" };
+    let hasAny = false;
+
+    if (occRes.status === "fulfilled" && occRes.value.ok) {
+      const oJson = await occRes.value.json();
+      const occDetail = oJson?.OccupationDetail || oJson;
+      const wageInfo =
+        occDetail?.Wages?.NationalWagesList?.[0] || occDetail?.Wages || {};
+      const projInfo = occDetail?.Projections || {};
+
+      if (wageInfo.Pct50 || wageInfo.Median) {
+        const med = Number(wageInfo.Pct50 || wageInfo.Median);
+        if (med > 0) {
+          result.roleMedianSalary = Math.round(med);
+          result.percentiles = {
+            p10: Math.round(Number(wageInfo.Pct10) || med * 0.63),
+            p25: Math.round(Number(wageInfo.Pct25) || med * 0.79),
+            p50: Math.round(med),
+            p75: Math.round(Number(wageInfo.Pct75) || med * 1.24),
+            p90: Math.round(Number(wageInfo.Pct90) || med * 1.54),
+          };
+          hasAny = true;
+        }
+      }
+      if (projInfo.ProjectedEmployment || projInfo.Employment) {
+        result.totalMetroEmployment = Number(
+          projInfo.ProjectedEmployment || projInfo.Employment,
+        );
+        hasAny = true;
+      }
+      if (projInfo.AnnualOpenings || projInfo.Openings) {
+        result.annualJobOpenings = Number(
+          projInfo.AnnualOpenings || projInfo.Openings,
+        );
+        hasAny = true;
+      }
+      if (Array.isArray(occDetail?.Skills) && occDetail.Skills.length > 0) {
+        result.skills = occDetail.Skills.slice(0, 6).map(
+          (s) => s.SkillName || s.Title || String(s),
+        );
+        hasAny = true;
+      }
+    }
+
+    if (unempRes.status === "fulfilled" && unempRes.value.ok) {
+      const uJson = await unempRes.value.json();
+      const rate = parseFloat(
+        uJson?.UnemploymentRate ||
+          uJson?.AreaData?.[0]?.UnemploymentRate ||
+          uJson?.Rate,
+      );
+      if (!isNaN(rate) && rate > 0) {
+        result.unemploymentRate = Number(rate.toFixed(1));
+        hasAny = true;
+      }
+    }
+
+    if (!hasAny) return null;
+    cacheService.set(cacheKey, result);
+    return result;
+  } catch (err) {
+    console.warn(`CareerOneStop fallback for ${cityObj.city}:`, err.message);
+    return null;
+  }
+}
+
+/**
+ * 7. U.S. Bureau of Labor Statistics (BLS) Public Data API v2 (OEWS & LAUS Raw Time Series)
+ * Docs: https://www.bls.gov/developers/
+ */
+export async function fetchBLSLaborTimeSeries(
+  cityObj,
+  careerProfile,
+  blsApiKey,
+  fallbackSeriesId,
+) {
+  if (cityObj.isInternational) return null;
+  const cacheKey = `bls_oews_laus_${cityObj.id}_${careerProfile.socCode}`;
+  const cached = cacheService.get(cacheKey);
+  if (cached) return cached;
+
+  try {
+    const seriesIds = [
+      fallbackSeriesId,
+      `LAUST${cityObj.censusStateFips || "29"}0000000000003`,
+    ].filter(Boolean);
+
+    const payload = {
+      seriesid: seriesIds,
+      startyear: "2022",
+      endyear: "2026",
+    };
+    if (blsApiKey) {
+      payload.registrationkey = blsApiKey;
+    }
+
+    const res = await fetch(
+      "https://api.bls.gov/publicAPI/v2/timeseries/data/",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+    );
+    if (!res.ok) throw new Error(`BLS HTTP ${res.status}`);
+    const json = await res.json();
+    const seriesList = json?.Results?.series;
+    if (Array.isArray(seriesList) && seriesList.length > 0) {
+      const firstSeries = seriesList[0];
+      const points = Array.isArray(firstSeries?.data)
+        ? firstSeries.data.slice(0, 6).map((pt) => ({
+            period: `${pt.year} ${pt.periodName || pt.period}`,
+            rawValue: Number(pt.value),
+            footnotes: (pt.footnotes || [])
+              .map((f) => f.text)
+              .filter(Boolean)
+              .join("; "),
+          }))
+        : [];
+      const out = {
+        seriesId: firstSeries.seriesID,
+        points,
+        source: blsApiKey ? "BLS API v2 (Registered)" : "BLS Public API v2",
+      };
+      cacheService.set(cacheKey, out);
+      return out;
+    }
+  } catch (err) {
+    console.warn(`BLS API fallback for ${cityObj.city}:`, err.message);
+  }
+  return null;
+}
+
+/**
+ * 8. OpenStreetMap Nominatim Geocoding (Keyless Public API)
  */
 export async function geocodeCityNominatim(cityName, countryName) {
   const query = `${cityName}, ${countryName}`;

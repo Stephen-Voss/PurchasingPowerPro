@@ -12,19 +12,19 @@ import {
   DollarSign,
   Building2,
   Sliders,
-  ChevronDown,
-  ChevronUp,
   ShieldCheck,
   Share2,
-  Check
+  Check,
+  Briefcase
 } from 'lucide-react';
 import { DEFAULT_CITIES, INTERNATIONAL_PRESETS } from './data/citiesData';
+import { CAREER_PROFILES, CAREER_CATEGORIES, buildBaselineCareerMetrics } from './data/careerData';
 import {
   evaluateCityMetrics,
   DEFAULT_TAX_PROFILE,
-  DEFAULT_BUDGET_WEIGHTS,
-  normalizeBudgetWeights
+  DEFAULT_BUDGET_WEIGHTS
 } from './utils/costCalculator';
+import { evaluateCityCareerViability } from './utils/careerCalculator';
 import {
   getStoredApiKeys,
   saveApiKeys,
@@ -34,11 +34,18 @@ import {
   fetchAPVerveColIndex,
   fetchAPINinjasTax,
   fetchBEARegionalParity,
+  fetchAdzunaCareerData,
+  fetchCareerOneStopData,
+  fetchBLSLaborTimeSeries,
   geocodeCityNominatim
 } from './services/apiService';
 import { cacheService } from './services/cacheService';
+import { TrackedCitiesSelector } from './components/TrackedCitiesSelector';
 import { TaxAndBudgetControls } from './components/TaxAndBudgetControls';
 import { TaxBreakdownModal } from './components/TaxBreakdownModal';
+import { BudgetBreakdownModal } from './components/BudgetBreakdownModal';
+import { CareerViabilityModal } from './components/CareerViabilityModal';
+import { RelocationCompareModal } from './components/RelocationCompareModal';
 import { CostChartView, CostMapView } from './components/VisualizationViews';
 import { CityTable } from './components/CityTable';
 import './App.css';
@@ -49,14 +56,9 @@ const clampNum = (val, min, max, fallback) => {
   return Math.min(max, Math.max(min, n));
 };
 
-/**
- * Parses URL query parameters (?base=STL&salary=150000&filing=married&w=34,16,15,9,11,15...)
- * Supports both compact comma-separated weights (?w=...) and individual category params.
- */
 function parseUrlQueryState(citiesList) {
   const params = new URLSearchParams(window.location.search);
 
-  // 1. Resolve Base City by 3-letter code, id, or city name
   const rawBase = (params.get('base') || '').trim();
   let matchedCity = citiesList.find((c) => c.id === 'st--louis-mo') || citiesList[0];
   if (rawBase) {
@@ -68,10 +70,44 @@ function parseUrlQueryState(citiesList) {
       matchedCity;
   }
 
-  // 2. Target Salary
   const targetSalary = clampNum(params.get('salary'), 25000, 2000000, 150000);
 
-  // 3. Tax & Household Profile
+  const rawRole = (params.get('role') || '').trim().toLowerCase();
+  const matchedRole =
+    CAREER_PROFILES.find((p) => p.id === rawRole || p.title.toLowerCase() === rawRole) ||
+    CAREER_PROFILES[0];
+
+  const rawTracked = (params.get('tracked') || '').trim();
+  let initialTrackedIds = null;
+  if (rawTracked === 'top1') {
+    initialTrackedIds = citiesList
+      .filter((c) => c.popRankInState === 1 || c.id === matchedCity.id)
+      .map((c) => c.id);
+  } else if (rawTracked === 'all') {
+    initialTrackedIds = citiesList.map((c) => c.id);
+  } else if (rawTracked) {
+    const codes = rawTracked.split(',').map((s) => s.trim().toLowerCase());
+    const foundIds = citiesList
+      .filter((c) => codes.includes(c.code.toLowerCase()) || codes.includes(c.id.toLowerCase()))
+      .map((c) => c.id);
+    if (foundIds.length > 0) {
+      initialTrackedIds = Array.from(new Set([matchedCity.id, ...foundIds]));
+    }
+  }
+
+  if (!initialTrackedIds) {
+    initialTrackedIds = Array.from(
+      new Set(
+        [
+          matchedCity.id,
+          citiesList.find((c) => c.code === 'LON')?.id,
+          citiesList.find((c) => c.code === 'SEA')?.id,
+          citiesList.find((c) => c.code === 'NYC')?.id
+        ].filter(Boolean)
+      )
+    );
+  }
+
   const rawFiling = (params.get('filing') || '').toLowerCase();
   const filingStatus = ['single', 'married', 'hoh'].includes(rawFiling)
     ? rawFiling
@@ -93,7 +129,6 @@ function parseUrlQueryState(citiesList) {
     preTaxRetirementPct
   };
 
-  // 4. Budget Weights (Supports ?w=34,16,15,9,11,15 OR individual ?housing=40&food=15...)
   let budgetWeights = { ...DEFAULT_BUDGET_WEIGHTS };
   const rawW = params.get('w');
   if (rawW) {
@@ -108,25 +143,14 @@ function parseUrlQueryState(citiesList) {
         misc: clampNum(parts[5], 2, 65, DEFAULT_BUDGET_WEIGHTS.misc)
       };
     }
-  } else {
-    budgetWeights = {
-      housing: clampNum(params.get('housing'), 2, 65, DEFAULT_BUDGET_WEIGHTS.housing),
-      food: clampNum(params.get('food'), 2, 65, DEFAULT_BUDGET_WEIGHTS.food),
-      transportation: clampNum(params.get('transit'), 2, 65, DEFAULT_BUDGET_WEIGHTS.transportation),
-      utilities: clampNum(params.get('utilities'), 2, 65, DEFAULT_BUDGET_WEIGHTS.utilities),
-      healthcare: clampNum(params.get('health'), 2, 65, DEFAULT_BUDGET_WEIGHTS.healthcare),
-      misc: clampNum(params.get('misc'), 2, 65, DEFAULT_BUDGET_WEIGHTS.misc)
-    };
   }
 
-  // 5. View & Filter State
   const activeView = params.get('view') === 'map' ? 'map' : 'chart';
   const stateFilter = params.get('state') || 'ALL';
   const rankParam = params.get('rank');
   const rankFilter = ['ALL', 'TOP1', 'INTL'].includes(rankParam) ? rankParam : 'ALL';
   const searchFilter = params.get('q') || '';
 
-  // 6. Optional Inspected City Modal (?inspect=SEA)
   const rawInspect = (params.get('inspect') || '').trim().toLowerCase();
   const inspectedMatch = rawInspect
     ? citiesList.find(
@@ -134,17 +158,35 @@ function parseUrlQueryState(citiesList) {
       )
     : null;
 
+  const rawBudget = (params.get('budget') || '').trim().toLowerCase();
+  const budgetMatch = rawBudget
+    ? citiesList.find(
+        (c) => c.code.toLowerCase() === rawBudget || c.id.toLowerCase() === rawBudget
+      )
+    : null;
+
+  const rawCareer = (params.get('career') || '').trim().toLowerCase();
+  const careerMatch = rawCareer
+    ? citiesList.find(
+        (c) => c.code.toLowerCase() === rawCareer || c.id.toLowerCase() === rawCareer
+      )
+    : null;
+
   return {
     baseCityId: matchedCity.id,
     baseQueryInput: matchedCity.code,
     targetSalary,
+    selectedCareerId: matchedRole.id,
+    selectedCityIds: initialTrackedIds,
     taxProfile,
     budgetWeights,
     activeView,
     stateFilter,
     rankFilter,
     searchFilter,
-    inspectedTaxCityId: inspectedMatch ? inspectedMatch.id : null
+    inspectedTaxCityId: inspectedMatch ? inspectedMatch.id : null,
+    inspectedBudgetCityId: budgetMatch ? budgetMatch.id : null,
+    inspectedCareerCityId: careerMatch ? careerMatch.id : null
   };
 }
 
@@ -155,23 +197,31 @@ export default function App() {
     return [...DEFAULT_CITIES, ...customList];
   });
 
-  // Hydrate initial state from URL query parameters
   const initialUrlState = useMemo(() => parseUrlQueryState(cities), []);
 
   const [baseCityId, setBaseCityId] = useState(initialUrlState.baseCityId);
   const [baseQueryInput, setBaseQueryInput] = useState(initialUrlState.baseQueryInput);
   const [targetSalary, setTargetSalary] = useState(initialUrlState.targetSalary);
+  const [selectedCareerId, setSelectedCareerId] = useState(initialUrlState.selectedCareerId);
+  const [selectedCityIds, setSelectedCityIds] = useState(initialUrlState.selectedCityIds);
 
-  // Hidden by default; uses default or URL-supplied tax & budget inputs unless expanded
-  const [showSlidersPanel, setShowSlidersPanel] = useState(false);
+  const [showTaxBudgetModal, setShowTaxBudgetModal] = useState(false);
   const [taxProfile, setTaxProfile] = useState(initialUrlState.taxProfile);
   const [budgetWeights, setBudgetWeights] = useState(initialUrlState.budgetWeights);
 
   const deferredTaxProfile = useDeferredValue(taxProfile);
   const deferredBudgetWeights = useDeferredValue(budgetWeights);
   const deferredSalary = useDeferredValue(Number(targetSalary) || 150000);
+  const deferredCareerId = useDeferredValue(selectedCareerId);
 
   const [inspectedTaxCityId, setInspectedTaxCityId] = useState(initialUrlState.inspectedTaxCityId);
+  const [inspectedBudgetCityId, setInspectedBudgetCityId] = useState(
+    initialUrlState.inspectedBudgetCityId
+  );
+  const [inspectedCareerCityId, setInspectedCareerCityId] = useState(
+    initialUrlState.inspectedCareerCityId
+  );
+  const [compareTargetCityId, setCompareTargetCityId] = useState(null);
   const [activeView, setActiveView] = useState(initialUrlState.activeView);
 
   const [searchFilter, setSearchFilter] = useState(initialUrlState.searchFilter);
@@ -183,8 +233,9 @@ export default function App() {
   const [showApiDrawer, setShowApiDrawer] = useState(false);
   const [apiKeys, setApiKeys] = useState(getStoredApiKeys);
   const [liveTaxOverrides, setLiveTaxOverrides] = useState({});
+  const [liveCareerOverrides, setLiveCareerOverrides] = useState({});
   const [syncStatus, setSyncStatus] = useState(
-    'Public Demo Engine Active (2026 BEA RPP + IRS/State/UK Tax + Keyless US Census ACS)'
+    'Public Demo Engine Active (2026 BEA RPP + Tax + Keyless US Census ACS + Career LMI)'
   );
   const [isSyncing, setIsSyncing] = useState(false);
   const [cacheStats, setCacheStats] = useState(() => cacheService.getSummary());
@@ -206,13 +257,19 @@ export default function App() {
     medianWageAnnual: 58000
   });
 
-  // Listen to browser Back / Forward navigation (popstate)
+  const activeCareerProfile = useMemo(
+    () => CAREER_PROFILES.find((p) => p.id === deferredCareerId) || CAREER_PROFILES[0],
+    [deferredCareerId]
+  );
+
   useEffect(() => {
     const handlePopState = () => {
       const parsed = parseUrlQueryState(cities);
       setBaseCityId(parsed.baseCityId);
       setBaseQueryInput(parsed.baseQueryInput);
       setTargetSalary(parsed.targetSalary);
+      setSelectedCareerId(parsed.selectedCareerId);
+      setSelectedCityIds(parsed.selectedCityIds);
       setTaxProfile(parsed.taxProfile);
       setBudgetWeights(parsed.budgetWeights);
       setActiveView(parsed.activeView);
@@ -220,6 +277,8 @@ export default function App() {
       setRankFilter(parsed.rankFilter);
       setSearchFilter(parsed.searchFilter);
       setInspectedTaxCityId(parsed.inspectedTaxCityId);
+      setInspectedBudgetCityId(parsed.inspectedBudgetCityId);
+      setInspectedCareerCityId(parsed.inspectedCareerCityId);
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
@@ -249,7 +308,7 @@ export default function App() {
     applyCensusWages().then((ok) => {
       if (!mounted) return;
       if (ok) {
-        setSyncStatus('Public Demo Active: Live US Census ACS Wages + 2026 BEA RPP Baseline');
+        setSyncStatus('Public Demo Active: Live US Census ACS Wages + 2026 BEA RPP + Career LMI');
       }
     });
     return () => {
@@ -262,11 +321,110 @@ export default function App() {
     [cities, baseCityId]
   );
 
-  // Sync active state to URL query parameters without reloading the page
+  const effectiveTrackedIds = useMemo(() => {
+    if (selectedCityIds.includes(baseCityRaw.id)) return selectedCityIds;
+    return [baseCityRaw.id, ...selectedCityIds];
+  }, [selectedCityIds, baseCityRaw.id]);
+
+  // Hydrate any cached API entries from localStorage whenever tracked cities or career/salary change
+  // without making outbound network API calls.
+  useEffect(() => {
+    const trackedSet = new Set(effectiveTrackedIds);
+    const trackedObjs = cities.filter((c) => trackedSet.has(c.id));
+    const roundedIncome = Math.round((Number(targetSalary) || 150000) / 500) * 500;
+    const apiFiling =
+      taxProfile.filingStatus === 'married'
+        ? 'married'
+        : taxProfile.filingStatus === 'hoh'
+        ? 'head_of_household'
+        : 'single';
+
+    const cachedIndexUpdates = {};
+    const cachedTaxUpdates = {};
+    const cachedCareerUpdates = {};
+    let restoredAny = false;
+
+    for (const cityObj of trackedObjs) {
+      const apvCached = cacheService.get(`apverve_col6_${cityObj.id}`);
+      const beaCached = cacheService.get(`bea_rpp_${cityObj.state}`);
+      if (apvCached) {
+        cachedIndexUpdates[cityObj.id] = apvCached;
+        restoredAny = true;
+      } else if (beaCached?.stateRpp && cityObj.indices?.overall) {
+        const ratio = beaCached.stateRpp / cityObj.indices.overall;
+        cachedIndexUpdates[cityObj.id] = {
+          overall: Number(beaCached.stateRpp.toFixed(1)),
+          housing: Number((cityObj.indices.housing * ratio).toFixed(1)),
+          food: Number((cityObj.indices.food * ratio).toFixed(1)),
+          transportation: Number((cityObj.indices.transportation * ratio).toFixed(1)),
+          utilities: Number((cityObj.indices.utilities * ratio).toFixed(1)),
+          healthcare: Number((cityObj.indices.healthcare * ratio).toFixed(1)),
+          misc: Number((cityObj.indices.misc * ratio).toFixed(1))
+        };
+        restoredAny = true;
+      }
+
+      const taxCached = cacheService.get(
+        `apininjas_tax_${cityObj.country}_${cityObj.state}_${roundedIncome}_${apiFiling}`
+      );
+      if (taxCached) {
+        cachedTaxUpdates[cityObj.id] = taxCached;
+        restoredAny = true;
+      }
+
+      const countrySlug = cityObj.country === 'GB' ? 'gb' : 'us';
+      const socClean = activeCareerProfile.socCode.replace('-', '');
+      const adzCached = cacheService.get(
+        `adzuna_${countrySlug}_${cityObj.id}_${activeCareerProfile.id}`
+      );
+      const cosCached = cacheService.get(`cos_lmi_${cityObj.id}_${socClean}`);
+      const blsCached = cacheService.get(
+        `bls_oews_laus_${cityObj.id}_${activeCareerProfile.socCode}`
+      );
+
+      if (adzCached || cosCached || blsCached) {
+        cachedCareerUpdates[`${cityObj.id}_${activeCareerProfile.id}`] = {
+          adzuna: adzCached,
+          careerOneStop: cosCached,
+          bls: blsCached
+        };
+        restoredAny = true;
+      }
+    }
+
+    if (Object.keys(cachedIndexUpdates).length > 0) {
+      setCities((prev) =>
+        prev.map((c) => (cachedIndexUpdates[c.id] ? { ...c, indices: cachedIndexUpdates[c.id] } : c))
+      );
+    }
+    if (Object.keys(cachedTaxUpdates).length > 0) {
+      setLiveTaxOverrides((prev) => ({ ...prev, ...cachedTaxUpdates }));
+    }
+    if (Object.keys(cachedCareerUpdates).length > 0) {
+      setLiveCareerOverrides((prev) => ({ ...prev, ...cachedCareerUpdates }));
+    }
+    if (restoredAny) {
+      setCacheStats(cacheService.getSummary());
+    }
+  }, [effectiveTrackedIds, cities, targetSalary, taxProfile.filingStatus, activeCareerProfile]);
+
   useEffect(() => {
     const params = new URLSearchParams();
     params.set('base', baseCityRaw.code);
     params.set('salary', String(deferredSalary));
+    if (deferredCareerId !== CAREER_PROFILES[0].id) {
+      params.set('role', deferredCareerId);
+    }
+
+    if (effectiveTrackedIds.length === cities.length) {
+      params.set('tracked', 'all');
+    } else {
+      const codes = cities
+        .filter((c) => effectiveTrackedIds.includes(c.id))
+        .map((c) => c.code)
+        .slice(0, 25);
+      if (codes.length > 0) params.set('tracked', codes.join(','));
+    }
 
     if (deferredTaxProfile.filingStatus !== DEFAULT_TAX_PROFILE.filingStatus) {
       params.set('filing', deferredTaxProfile.filingStatus);
@@ -313,11 +471,23 @@ export default function App() {
       if (inspectedObj) params.set('inspect', inspectedObj.code);
     }
 
+    if (inspectedBudgetCityId) {
+      const budgetObj = cities.find((c) => c.id === inspectedBudgetCityId);
+      if (budgetObj) params.set('budget', budgetObj.code);
+    }
+
+    if (inspectedCareerCityId) {
+      const careerObj = cities.find((c) => c.id === inspectedCareerCityId);
+      if (careerObj) params.set('career', careerObj.code);
+    }
+
     const newRelativeUrl = `${window.location.pathname}?${params.toString()}`;
     window.history.replaceState(null, '', newRelativeUrl);
   }, [
     baseCityRaw,
     deferredSalary,
+    deferredCareerId,
+    effectiveTrackedIds,
     deferredTaxProfile,
     deferredBudgetWeights,
     activeView,
@@ -325,17 +495,17 @@ export default function App() {
     rankFilter,
     searchFilter,
     inspectedTaxCityId,
+    inspectedBudgetCityId,
+    inspectedCareerCityId,
     cities
   ]);
 
-  // Copy Shareable Comparison URL to Clipboard
   const handleShareComparisonLink = useCallback(async () => {
     try {
       await navigator.clipboard.writeText(window.location.href);
       setLinkCopied(true);
       setTimeout(() => setLinkCopied(false), 2200);
     } catch {
-      // Fallback for older browsers
       const textArea = document.createElement('textarea');
       textArea.value = window.location.href;
       document.body.appendChild(textArea);
@@ -348,26 +518,73 @@ export default function App() {
   }, []);
 
   const evaluatedCities = useMemo(() => {
-    return cities.map((c) =>
-      evaluateCityMetrics(
+    return cities.map((c) => {
+      const costEval = evaluateCityMetrics(
         c,
         baseCityRaw,
         deferredSalary,
         deferredTaxProfile,
         deferredBudgetWeights,
         liveTaxOverrides[c.id]
-      )
-    );
-  }, [cities, baseCityRaw, deferredSalary, deferredTaxProfile, deferredBudgetWeights, liveTaxOverrides]);
+      );
+      const careerKey = `${c.id}_${activeCareerProfile.id}`;
+      const careerEval = evaluateCityCareerViability(
+        c,
+        activeCareerProfile,
+        costEval.equivalentGrossNeeded,
+        liveCareerOverrides[careerKey]
+      );
+      return {
+        ...costEval,
+        career: careerEval
+      };
+    });
+  }, [
+    cities,
+    baseCityRaw,
+    deferredSalary,
+    deferredTaxProfile,
+    deferredBudgetWeights,
+    liveTaxOverrides,
+    activeCareerProfile,
+    liveCareerOverrides
+  ]);
 
   const baseCityEvaluated = useMemo(
     () => evaluatedCities.find((c) => c.id === baseCityRaw.id) || evaluatedCities[0],
     [evaluatedCities, baseCityRaw]
   );
 
+  // Cities explicitly selected in Tracked Cities selector (used by Chart, Map, and Table)
+  const trackedVizCities = useMemo(() => {
+    const trackedSet = new Set(effectiveTrackedIds);
+    return evaluatedCities.filter((c) => trackedSet.has(c.id));
+  }, [evaluatedCities, effectiveTrackedIds]);
+
   const inspectedTaxCity = useMemo(
     () => (inspectedTaxCityId ? evaluatedCities.find((c) => c.id === inspectedTaxCityId) : null),
     [evaluatedCities, inspectedTaxCityId]
+  );
+
+  const inspectedBudgetCity = useMemo(
+    () =>
+      inspectedBudgetCityId
+        ? evaluatedCities.find((c) => c.id === inspectedBudgetCityId)
+        : null,
+    [evaluatedCities, inspectedBudgetCityId]
+  );
+
+  const inspectedCareerCity = useMemo(
+    () =>
+      inspectedCareerCityId
+        ? evaluatedCities.find((c) => c.id === inspectedCareerCityId)
+        : null,
+    [evaluatedCities, inspectedCareerCityId]
+  );
+
+  const compareTargetCity = useMemo(
+    () => (compareTargetCityId ? evaluatedCities.find((c) => c.id === compareTargetCityId) : null),
+    [evaluatedCities, compareTargetCityId]
   );
 
   const handleBaseInputCommit = (val) => {
@@ -380,11 +597,13 @@ export default function App() {
       cities.find((c) => `${c.city}, ${c.state}`.toLowerCase().includes(q));
     if (match) {
       setBaseCityId(match.id);
+      setSelectedCityIds((prev) => (prev.includes(match.id) ? prev : [match.id, ...prev]));
     }
   };
 
-  const filteredCities = useMemo(() => {
-    return evaluatedCities.filter((c) => {
+  // Table displays ONLY tracked cities (filtered by optional search/state/rank within tracked set)
+  const filteredTrackedTableCities = useMemo(() => {
+    return trackedVizCities.filter((c) => {
       if (stateFilter !== 'ALL' && c.state !== stateFilter) return false;
       if (rankFilter === 'TOP1' && c.popRankInState !== 1 && c.id !== baseCityRaw.id) return false;
       if (rankFilter === 'INTL' && !c.isInternational && c.id !== baseCityRaw.id) return false;
@@ -395,7 +614,7 @@ export default function App() {
       }
       return true;
     });
-  }, [evaluatedCities, stateFilter, rankFilter, searchFilter, baseCityRaw]);
+  }, [trackedVizCities, stateFilter, rankFilter, searchFilter, baseCityRaw]);
 
   const handleLiveApiSync = async () => {
     setIsSyncing(true);
@@ -405,22 +624,39 @@ export default function App() {
 
     if (!hasCustomApiKeys(apiKeys)) {
       setCacheStats(cacheService.getSummary());
-      setSyncStatus('Synced Keyless US Census ACS + Default 2026 BEA RPP & Tax Engine');
+      setSyncStatus('Synced Keyless US Census ACS + Default 2026 BEA RPP & Career LMI');
       setIsSyncing(false);
       return;
     }
 
-    const batch = filteredCities.slice(0, 12);
+    // Only query APIs for user-tracked cities (each fetcher checks cacheService first)
+    const batch = trackedVizCities.slice(0, 10);
     let updatedCount = 0;
 
     const updatedCitiesMap = {};
     const newTaxOverrides = { ...liveTaxOverrides };
+    const newCareerOverrides = { ...liveCareerOverrides };
 
     for (const cityObj of batch) {
-      const [apvData, beaData, taxData] = await Promise.all([
+      const baselineCareer = buildBaselineCareerMetrics(cityObj, activeCareerProfile);
+
+      const [apvData, beaData, taxData, adzunaData, cosData, blsData] = await Promise.all([
         fetchAPVerveColIndex(cityObj, apiKeys.apverve),
         fetchBEARegionalParity(cityObj, apiKeys.bea),
-        fetchAPINinjasTax(cityObj, targetSalary, taxProfile.filingStatus, apiKeys.apininjas)
+        fetchAPINinjasTax(cityObj, targetSalary, taxProfile.filingStatus, apiKeys.apininjas),
+        fetchAdzunaCareerData(cityObj, activeCareerProfile, apiKeys.adzunaAppId, apiKeys.adzunaAppKey),
+        fetchCareerOneStopData(
+          cityObj,
+          activeCareerProfile,
+          apiKeys.careerOneStopUserId,
+          apiKeys.careerOneStopToken
+        ),
+        fetchBLSLaborTimeSeries(
+          cityObj,
+          activeCareerProfile,
+          apiKeys.blsApiKey,
+          baselineCareer.blsMeta.oewsSeriesId
+        )
       ]);
 
       if (apvData) {
@@ -444,6 +680,16 @@ export default function App() {
         newTaxOverrides[cityObj.id] = taxData;
         updatedCount++;
       }
+
+      if (adzunaData || cosData || blsData) {
+        const cKey = `${cityObj.id}_${activeCareerProfile.id}`;
+        newCareerOverrides[cKey] = {
+          adzuna: adzunaData,
+          careerOneStop: cosData,
+          bls: blsData
+        };
+        updatedCount++;
+      }
     }
 
     if (Object.keys(updatedCitiesMap).length > 0) {
@@ -452,11 +698,12 @@ export default function App() {
       );
     }
     setLiveTaxOverrides(newTaxOverrides);
+    setLiveCareerOverrides(newCareerOverrides);
     setCacheStats(cacheService.getSummary());
     setSyncStatus(
       updatedCount > 0
-        ? `BYOK Live Sync Complete: Updated ${updatedCount} endpoints (Cached in localStorage)`
-        : 'Keyless US Census ACS + Default 2026 BEA RPP Engine Active'
+        ? `BYOK Live Sync (${batch.length} tracked cities): Updated ${updatedCount} results (Cached)`
+        : 'Keyless US Census ACS + Default 2026 BEA RPP & Career LMI Active'
     );
     setIsSyncing(false);
   };
@@ -504,6 +751,7 @@ export default function App() {
       localStorage.setItem('cost_tracker_custom_cities_v2', JSON.stringify(customOnly));
       return updated;
     });
+    setSelectedCityIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
     setShowIntlModal(false);
   };
 
@@ -544,26 +792,18 @@ export default function App() {
       localStorage.setItem('cost_tracker_custom_cities_v2', JSON.stringify(customOnly));
       return updated;
     });
+    setSelectedCityIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
   };
 
-  const seattleSpotlight = evaluatedCities.find((c) => c.code === 'SEA');
-  const londonSpotlight = evaluatedCities.find((c) => c.code === 'LON');
-  const nycSpotlight = evaluatedCities.find((c) => c.code === 'NYC');
-
-  const fmtUSD = (val) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val);
-
   const uniqueStates = useMemo(
-    () => Array.from(new Set(cities.map((c) => c.state))).sort(),
-    [cities]
+    () => Array.from(new Set(trackedVizCities.map((c) => c.state))).sort(),
+    [trackedVizCities]
   );
 
-  const normWeights = normalizeBudgetWeights(budgetWeights);
   const usingByok = hasCustomApiKeys(apiKeys);
 
   return (
     <div className="m3-app-layout">
-      {/* Material Design 3 Top App Bar */}
       <header className="m3-app-bar">
         <div className="m3-app-bar-inner">
           <div className="brand-block">
@@ -575,7 +815,7 @@ export default function App() {
               </span>
             </div>
             <p className="subtitle">
-              150 U.S. Cities + London • Built-in 2026 BEA RPP &amp; Tax Engine + Keyless US Census ACS API
+              150 U.S. Cities + London • Cost, Tax, Career Viability (Adzuna, CareerOneStop &amp; BLS)
             </p>
           </div>
           <div className="header-actions">
@@ -583,19 +823,10 @@ export default function App() {
               type="button"
               className={linkCopied ? 'btn-primary' : 'btn-secondary'}
               onClick={handleShareComparisonLink}
-              title="Copy shareable URL with your current Base City, salary, tax profile, and budget weights"
+              title="Copy shareable URL with your current Base City, profession, salary, tax profile, and budget weights"
             >
               {linkCopied ? <Check size={15} /> : <Share2 size={15} />}
               <span>{linkCopied ? 'Copied Share Link!' : 'Share Link'}</span>
-            </button>
-            <button
-              type="button"
-              className={showSlidersPanel ? 'btn-secondary active-outline' : 'btn-secondary'}
-              onClick={() => setShowSlidersPanel(!showSlidersPanel)}
-            >
-              <Sliders size={15} />
-              <span>Tax &amp; Budget Sliders</span>
-              {showSlidersPanel ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
             </button>
             <button type="button" className="btn-secondary" onClick={() => setShowIntlModal(true)}>
               <Globe size={15} /> <span>+ International City</span>
@@ -607,40 +838,83 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Fluid Content Container */}
       <main className="m3-main-container">
-        {/* BYOK API Keys & Cache Drawer */}
         {showApiDrawer && (
           <section className="api-drawer">
             <p className="helper-note" style={{ marginTop: 0, marginBottom: '0.85rem', color: '#cbd5e1' }}>
-              <strong>GitHub Pages Public Demo Security:</strong> No API keys are bundled with this site. The app runs out-of-the-box using our embedded 2026 BEA Regional Price Parities, progressive US/UK tax tables, and keyless US Census ACS &amp; OpenStreetMap APIs. Optionally enter your own personal keys below (stored exclusively in your browser&apos;s <code>localStorage</code>).
+              <strong>GitHub Pages Public Demo Security:</strong> No API keys are bundled with this site. Keys entered below are saved strictly in your browser&apos;s <code>localStorage</code> and cached for 7 days. See <code>API_KEYS_GUIDE.md</code> for instructions on obtaining each key.
             </p>
             <div className="api-grid">
               <div>
-                <label>Optional: APVerve Key (Cost of Living API)</label>
+                <label>APVerve Key (Cost of Living)</label>
                 <input
                   type="password"
-                  placeholder="Local browser x-api-key..."
+                  placeholder="Optional x-api-key..."
                   value={apiKeys.apverve}
                   onChange={(e) => setApiKeys({ ...apiKeys, apverve: e.target.value })}
                 />
               </div>
               <div>
-                <label>Optional: API Ninjas Key (Income Tax API)</label>
+                <label>API Ninjas Key (Income Tax)</label>
                 <input
                   type="password"
-                  placeholder="Local browser X-Api-Key..."
+                  placeholder="Optional X-Api-Key..."
                   value={apiKeys.apininjas}
                   onChange={(e) => setApiKeys({ ...apiKeys, apininjas: e.target.value })}
                 />
               </div>
               <div>
-                <label>Optional: BEA UserID Key (Regional Parities)</label>
+                <label>BEA UserID Key (Regional Parities)</label>
                 <input
                   type="password"
-                  placeholder="Local browser 36-char UserID..."
+                  placeholder="Optional 36-char BEA UserID..."
                   value={apiKeys.bea}
                   onChange={(e) => setApiKeys({ ...apiKeys, bea: e.target.value })}
+                />
+              </div>
+              <div>
+                <label>Adzuna App ID</label>
+                <input
+                  type="text"
+                  placeholder="Optional Adzuna app_id..."
+                  value={apiKeys.adzunaAppId}
+                  onChange={(e) => setApiKeys({ ...apiKeys, adzunaAppId: e.target.value })}
+                />
+              </div>
+              <div>
+                <label>Adzuna App Key</label>
+                <input
+                  type="password"
+                  placeholder="Optional Adzuna app_key..."
+                  value={apiKeys.adzunaAppKey}
+                  onChange={(e) => setApiKeys({ ...apiKeys, adzunaAppKey: e.target.value })}
+                />
+              </div>
+              <div>
+                <label>CareerOneStop User ID</label>
+                <input
+                  type="text"
+                  placeholder="Optional COS User ID..."
+                  value={apiKeys.careerOneStopUserId}
+                  onChange={(e) => setApiKeys({ ...apiKeys, careerOneStopUserId: e.target.value })}
+                />
+              </div>
+              <div>
+                <label>CareerOneStop API Token</label>
+                <input
+                  type="password"
+                  placeholder="Optional COS Bearer token..."
+                  value={apiKeys.careerOneStopToken}
+                  onChange={(e) => setApiKeys({ ...apiKeys, careerOneStopToken: e.target.value })}
+                />
+              </div>
+              <div>
+                <label>BLS API v2 Key (OEWS &amp; LAUS)</label>
+                <input
+                  type="password"
+                  placeholder="Optional BLS registration key..."
+                  value={apiKeys.blsApiKey}
+                  onChange={(e) => setApiKeys({ ...apiKeys, blsApiKey: e.target.value })}
                 />
               </div>
             </div>
@@ -656,13 +930,15 @@ export default function App() {
               <div className="api-btns">
                 <button className="btn-primary" onClick={handleLiveApiSync} disabled={isSyncing}>
                   <RefreshCw size={15} className={isSyncing ? 'spin' : ''} />{' '}
-                  {isSyncing ? 'Syncing...' : 'Save Browser Keys & Sync'}
+                  {isSyncing ? 'Syncing...' : 'Save Browser Keys & Sync Tracked'}
                 </button>
                 <button
                   className="btn-danger"
                   onClick={() => {
                     clearStoredApiKeys();
-                    setApiKeys({ apverve: '', apininjas: '', bea: '' });
+                    setApiKeys(getStoredApiKeys());
+                    setLiveCareerOverrides({});
+                    setLiveTaxOverrides({});
                     cacheService.clearAll();
                     setCacheStats(cacheService.getSummary());
                     setSyncStatus('Reset to Public Demo Defaults (Zero-Key Engine)');
@@ -675,18 +951,18 @@ export default function App() {
           </section>
         )}
 
-        {/* Primary Control Surface: Base City + Target Salary + Benchmark Callouts */}
-        <section className="control-panel">
+        {/* Primary Control Surface */}
+        <section className="control-panel-v4">
           <div className="control-group">
             <label>
-              <Building2 size={15} /> Base City Code or Name (e.g., STL, SEA, NYC)
+              <Building2 size={14} /> Base City (Code or Select)
             </label>
             <div className="dual-input">
               <input
                 type="text"
                 value={baseQueryInput}
                 onChange={(e) => handleBaseInputCommit(e.target.value)}
-                placeholder="STL, SEA..."
+                placeholder="STL"
                 className="code-input"
               />
               <select
@@ -695,6 +971,9 @@ export default function App() {
                   setBaseCityId(e.target.value);
                   const found = cities.find((c) => c.id === e.target.value);
                   if (found) setBaseQueryInput(found.code);
+                  setSelectedCityIds((prev) =>
+                    prev.includes(e.target.value) ? prev : [e.target.value, ...prev]
+                  );
                 }}
               >
                 {cities.map((c) => (
@@ -708,7 +987,7 @@ export default function App() {
 
           <div className="control-group">
             <label>
-              <DollarSign size={15} /> Target Base Salary (USD)
+              <DollarSign size={14} /> Target Base Salary (USD)
             </label>
             <input
               type="number"
@@ -721,66 +1000,52 @@ export default function App() {
             />
           </div>
 
-          <div className="spotlight-cards">
-            {seattleSpotlight && (
-              <div className="spotlight-card" onClick={() => setInspectedTaxCityId(seattleSpotlight.id)}>
-                <span className="spot-label">Match {baseCityEvaluated.code} in Seattle (SEA)</span>
-                <strong className="spot-value">{fmtUSD(seattleSpotlight.equivalentGrossNeeded)}</strong>
-                <small>Leftover on {fmtUSD(targetSalary)}: {fmtUSD(seattleSpotlight.fixedSalary.leftover)}</small>
-              </div>
-            )}
-            {nycSpotlight && (
-              <div className="spotlight-card" onClick={() => setInspectedTaxCityId(nycSpotlight.id)}>
-                <span className="spot-label">Match {baseCityEvaluated.code} in New York (NYC)</span>
-                <strong className="spot-value">{fmtUSD(nycSpotlight.equivalentGrossNeeded)}</strong>
-                <small>Leftover on {fmtUSD(targetSalary)}: {fmtUSD(nycSpotlight.fixedSalary.leftover)}</small>
-              </div>
-            )}
-            {londonSpotlight && (
-              <div className="spotlight-card" onClick={() => setInspectedTaxCityId(londonSpotlight.id)}>
-                <span className="spot-label">Match {baseCityEvaluated.code} in London (LON)</span>
-                <strong className="spot-value">{fmtUSD(londonSpotlight.equivalentGrossNeeded)}</strong>
-                <small>Leftover on {fmtUSD(targetSalary)}: {fmtUSD(londonSpotlight.fixedSalary.leftover)}</small>
-              </div>
-            )}
+          <div className="control-group">
+            <label>
+              <Briefcase size={14} /> Target Career / Profession
+            </label>
+            <select
+              value={selectedCareerId}
+              onChange={(e) => setSelectedCareerId(e.target.value)}
+              className="career-select"
+            >
+              {CAREER_CATEGORIES.map((categoryName) => {
+                const rolesInCategory = CAREER_PROFILES.filter(
+                  (prof) => prof.category === categoryName
+                );
+                if (rolesInCategory.length === 0) return null;
+                return (
+                  <optgroup key={categoryName} label={categoryName}>
+                    {rolesInCategory.map((prof) => (
+                      <option key={prof.id} value={prof.id}>
+                        {prof.title} (SOC {prof.socCode})
+                      </option>
+                    ))}
+                  </optgroup>
+                );
+              })}
+            </select>
           </div>
-        </section>
 
-        {/* Collapsed-by-Default M3 Summary Strip OR Expanded Tax & Budget Sliders */}
-        {!showSlidersPanel ? (
-          <div className="m3-collapsed-summary-bar" onClick={() => setShowSlidersPanel(true)}>
-            <div className="summary-chips-wrap">
-              <span className="summary-bar-title">
-                <Sliders size={14} /> Active Profile:
-              </span>
-              <span className="m3-chip">
-                Filing: <strong style={{ textTransform: 'capitalize' }}>{taxProfile.filingStatus}</strong>
-              </span>
-              <span className="m3-chip">
-                Household: <strong>{taxProfile.householdSize}</strong> ({taxProfile.dependents} Dep.)
-              </span>
-              <span className="m3-chip">
-                401(k)/HSA: <strong>{taxProfile.preTaxRetirementPct}%</strong>
-              </span>
-              <span className="m3-chip">
-                Budget: <strong>{Math.round(normWeights.housing * 100)}% Housing</strong> •{' '}
-                <strong>{Math.round(normWeights.food * 100)}% Food</strong> •{' '}
-                <strong>{Math.round(normWeights.transportation * 100)}% Transit</strong> (+3 more)
-              </span>
-            </div>
-            <button type="button" className="btn-tonal-sm">
-              Customize Tax &amp; Budget <ChevronDown size={14} />
+          <TrackedCitiesSelector
+            allCities={cities}
+            selectedCityIds={effectiveTrackedIds}
+            onChangeSelectedCityIds={setSelectedCityIds}
+            baseCityId={baseCityEvaluated.id}
+          />
+
+          <div className="control-group customize-trigger-group">
+            <label>Tax &amp; Budget Weights</label>
+            <button
+              type="button"
+              className="btn-secondary customize-modal-btn"
+              onClick={() => setShowTaxBudgetModal(true)}
+            >
+              <Sliders size={15} />
+              <span>Customize Tax &amp; Budget</span>
             </button>
           </div>
-        ) : (
-          <TaxAndBudgetControls
-            taxProfile={taxProfile}
-            onChangeTaxProfile={setTaxProfile}
-            budgetWeights={budgetWeights}
-            onChangeBudgetWeights={setBudgetWeights}
-            onClosePanel={() => setShowSlidersPanel(false)}
-          />
-        )}
+        </section>
 
         {/* Filter & View Toggle Bar */}
         <section className="toolbar-bar">
@@ -789,13 +1054,13 @@ export default function App() {
               className={activeView === 'chart' ? 'toggle-btn active' : 'toggle-btn'}
               onClick={() => setActiveView('chart')}
             >
-              <BarChart3 size={16} /> <span>Chart View</span>
+              <BarChart3 size={16} /> <span>Chart View ({trackedVizCities.length} Tracked)</span>
             </button>
             <button
               className={activeView === 'map' ? 'toggle-btn active' : 'toggle-btn'}
               onClick={() => setActiveView('map')}
             >
-              <MapPin size={16} /> <span>OpenStreetMap ({filteredCities.length})</span>
+              <MapPin size={16} /> <span>OpenStreetMap ({trackedVizCities.length} Tracked)</span>
             </button>
           </div>
 
@@ -804,14 +1069,14 @@ export default function App() {
               <Search size={15} />
               <input
                 type="text"
-                placeholder="Search city, state, or code..."
+                placeholder="Search tracked cities..."
                 value={searchFilter}
                 onChange={(e) => setSearchFilter(e.target.value)}
               />
             </div>
 
             <select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)}>
-              <option value="ALL">All States &amp; UK ({cities.length})</option>
+              <option value="ALL">Tracked States &amp; UK ({trackedVizCities.length} Cities)</option>
               {uniqueStates.map((st) => (
                 <option key={st} value={st}>
                   State / Region: {st}
@@ -820,44 +1085,52 @@ export default function App() {
             </select>
 
             <select value={rankFilter} onChange={(e) => setRankFilter(e.target.value)}>
-              <option value="ALL">All Top 3 Cities / State</option>
+              <option value="ALL">All Tracked Ranks</option>
               <option value="TOP1">#1 Largest City per State</option>
               <option value="INTL">International + Base City</option>
             </select>
           </div>
         </section>
 
-        {/* Active Chart or Map View */}
+        {/* Chart & Map View Driven by Explicitly Tracked Cities */}
         {activeView === 'chart' ? (
           <CostChartView
-            cities={filteredCities}
+            cities={trackedVizCities}
             baseCity={baseCityEvaluated}
             targetSalary={deferredSalary}
           />
         ) : (
           <CostMapView
-            cities={filteredCities}
+            cities={trackedVizCities}
             baseCity={baseCityEvaluated}
             targetSalary={deferredSalary}
             onInspectTax={(cityObj) => setInspectedTaxCityId(cityObj.id)}
           />
         )}
 
-        {/* Collapsible 6-Category Table + Min/Median Wage + Clickable Tax Inspector */}
+        {/* Table Displays ONLY Tracked Cities (Using Cached Data When Tracked Cities Change) */}
         <CityTable
-          cities={filteredCities}
+          cities={filteredTrackedTableCities}
+          totalTrackedCount={trackedVizCities.length}
           baseCity={baseCityEvaluated}
           targetSalary={deferredSalary}
-          onSelectBaseCity={(id) => {
-            setBaseCityId(id);
-            const found = cities.find((c) => c.id === id);
-            if (found) setBaseQueryInput(found.code);
-          }}
+          onCompareCity={(cityObj) => setCompareTargetCityId(cityObj.id)}
           onInspectTax={(cityObj) => setInspectedTaxCityId(cityObj.id)}
+          onInspectBudget={(cityObj) => setInspectedBudgetCityId(cityObj.id)}
+          onInspectCareer={(cityObj) => setInspectedCareerCityId(cityObj.id)}
         />
       </main>
 
-      {/* Interactive Tax Implications Modal */}
+      {showTaxBudgetModal && (
+        <TaxAndBudgetControls
+          taxProfile={taxProfile}
+          onChangeTaxProfile={setTaxProfile}
+          budgetWeights={budgetWeights}
+          onChangeBudgetWeights={setBudgetWeights}
+          onClosePanel={() => setShowTaxBudgetModal(false)}
+        />
+      )}
+
       {inspectedTaxCity && (
         <TaxBreakdownModal
           city={inspectedTaxCity}
@@ -867,7 +1140,32 @@ export default function App() {
         />
       )}
 
-      {/* Modal for Adding International Cities */}
+      {inspectedBudgetCity && (
+        <BudgetBreakdownModal
+          city={inspectedBudgetCity}
+          baseCity={baseCityEvaluated}
+          targetSalary={deferredSalary}
+          onClose={() => setInspectedBudgetCityId(null)}
+        />
+      )}
+
+      {inspectedCareerCity && (
+        <CareerViabilityModal
+          city={inspectedCareerCity}
+          onClose={() => setInspectedCareerCityId(null)}
+        />
+      )}
+
+      {compareTargetCity && (
+        <RelocationCompareModal
+          allCities={evaluatedCities}
+          baseCity={baseCityEvaluated}
+          initialTargetCity={compareTargetCity}
+          targetSalary={deferredSalary}
+          onClose={() => setCompareTargetCityId(null)}
+        />
+      )}
+
       {showIntlModal && (
         <div className="modal-backdrop" onClick={() => setShowIntlModal(false)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
