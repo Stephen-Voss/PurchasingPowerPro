@@ -3,6 +3,8 @@ import React, { useState, useMemo, useEffect, useDeferredValue, useCallback } fr
 import {
   BarChart3,
   MapPin,
+  TrendingUp,
+  Download,
   Database,
   Globe,
   RefreshCw,
@@ -40,9 +42,13 @@ import {
   fetchRentCastMarketData,
   fetchHudFairMarketRents,
   fetchCensusHousingDemographics,
+  fetchUnitedStatesLegislatorsRoster,
+  fetchCongressBillsV3,
+  fetchOpenStatesJurisdictionData,
   geocodeCityNominatim
 } from './services/apiService';
 import { cacheService } from './services/cacheService';
+import { exportSnapshotCsv, snapshotService } from './services/snapshotService';
 import { CityDropdownSelector } from './components/CityDropdownSelector';
 import { CareerDropdownSelector } from './components/CareerDropdownSelector';
 import { TaxAndBudgetControls } from './components/TaxAndBudgetControls';
@@ -50,7 +56,9 @@ import { TaxBreakdownModal } from './components/TaxBreakdownModal';
 import { BudgetBreakdownModal } from './components/BudgetBreakdownModal';
 import { CareerViabilityModal } from './components/CareerViabilityModal';
 import { RelocationCompareModal } from './components/RelocationCompareModal';
+import { LegislationQuarterModal } from './components/LegislationQuarterModal';
 import { CostChartView, CostMapView } from './components/VisualizationViews';
+import { TimelineView } from './components/TimelineView';
 import { CityTable } from './components/CityTable';
 import './App.css';
 
@@ -200,13 +208,14 @@ function resolveInitialAppState(citiesList) {
   }
 
   // 7. View & Filter State
-  const activeView = params.has('view')
-    ? params.get('view') === 'map'
-      ? 'map'
-      : 'chart'
-    : stored?.activeView === 'map'
-    ? 'map'
+  const validViews = ['chart', 'map', 'timeline'];
+  const viewParam = params.get('view');
+  const activeView = validViews.includes(viewParam)
+    ? viewParam
+    : validViews.includes(stored?.activeView)
+    ? stored.activeView
     : 'chart';
+
   const stateFilter = params.get('state') || 'ALL';
   const rankParam = params.get('rank');
   const rankFilter = ['ALL', 'TOP1', 'INTL'].includes(rankParam) ? rankParam : 'ALL';
@@ -283,7 +292,11 @@ export default function App() {
     initialState.inspectedCareerCityId
   );
   const [compareTargetCityId, setCompareTargetCityId] = useState(null);
+  const [inspectedQuarterState, setInspectedQuarterState] = useState(null);
   const [activeView, setActiveView] = useState(initialState.activeView);
+
+  // Historical CSV Snapshots State
+  const [snapshots, setSnapshots] = useState(() => snapshotService.getAll());
 
   const [searchFilter, setSearchFilter] = useState(initialState.searchFilter);
   const [stateFilter, setStateFilter] = useState(initialState.stateFilter);
@@ -297,7 +310,7 @@ export default function App() {
   const [liveCareerOverrides, setLiveCareerOverrides] = useState({});
   const [liveHousingOverrides, setLiveHousingOverrides] = useState({});
   const [syncStatus, setSyncStatus] = useState(
-    'Public Demo Engine Active (2026 BEA RPP + Tax + Housing FMR/ACS + Career LMI)'
+    'Public Demo Engine Active (2026 BEA RPP + Tax + Housing FMR/ACS + Career & Legislation)'
   );
   const [isSyncing, setIsSyncing] = useState(false);
   const [cacheStats, setCacheStats] = useState(() => cacheService.getSummary());
@@ -370,7 +383,7 @@ export default function App() {
     applyCensusWages().then((ok) => {
       if (!mounted) return;
       if (ok) {
-        setSyncStatus('Public Demo Active: Live US Census ACS Wages + 2026 BEA RPP + Housing & Career');
+        setSyncStatus('Public Demo Active: Live US Census ACS Wages + 2026 BEA RPP + Housing & Legislation');
       }
     });
     return () => {
@@ -676,6 +689,15 @@ export default function App() {
     return evaluatedCities.filter((c) => trackedSet.has(c.id));
   }, [evaluatedCities, effectiveTrackedIds]);
 
+  const handleExportCurrentCsv = useCallback(() => {
+    exportSnapshotCsv({
+      cities: trackedVizCities,
+      baseCity: baseCityEvaluated,
+      targetSalary: deferredSalary,
+      careerTitle: activeCareerProfile.title
+    });
+  }, [trackedVizCities, baseCityEvaluated, deferredSalary, activeCareerProfile]);
+
   const inspectedTaxCity = useMemo(
     () => (inspectedTaxCityId ? evaluatedCities.find((c) => c.id === inspectedTaxCityId) : null),
     [evaluatedCities, inspectedTaxCityId]
@@ -746,6 +768,14 @@ export default function App() {
     const batch = trackedVizCities.slice(0, 8);
     let updatedCount = 0;
 
+    // Fetch keyless @unitedstates federal legislator roster & optional Congress.gov v3 bills
+    const [usRoster, congressBills] = await Promise.all([
+      fetchUnitedStatesLegislatorsRoster(),
+      fetchCongressBillsV3(apiKeys.congressGovKey, 119)
+    ]);
+    if (usRoster) updatedCount++;
+    if (congressBills) updatedCount++;
+
     const updatedCitiesMap = {};
     const newTaxOverrides = { ...liveTaxOverrides };
     const newCareerOverrides = { ...liveCareerOverrides };
@@ -763,7 +793,8 @@ export default function App() {
         blsData,
         rcData,
         hudData,
-        cenHousingData
+        cenHousingData,
+        openStatesData
       ] = await Promise.all([
         fetchAPVerveColIndex(cityObj, apiKeys.apverve),
         fetchBEARegionalParity(cityObj, apiKeys.bea),
@@ -783,7 +814,8 @@ export default function App() {
         ),
         fetchRentCastMarketData(cityObj, apiKeys.rentcast),
         fetchHudFairMarketRents(cityObj, apiKeys.hudUserToken),
-        fetchCensusHousingDemographics(cityObj, apiKeys.censusApiKey)
+        fetchCensusHousingDemographics(cityObj, apiKeys.censusApiKey),
+        fetchOpenStatesJurisdictionData(cityObj.state, apiKeys.openStatesKey)
       ]);
 
       if (apvData) {
@@ -824,6 +856,10 @@ export default function App() {
           hud: hudData,
           census: cenHousingData
         };
+        updatedCount++;
+      }
+
+      if (openStatesData) {
         updatedCount++;
       }
     }
@@ -952,10 +988,18 @@ export default function App() {
               </span>
             </div>
             <p className="subtitle">
-              150+ U.S. Cities & D.C. + London • Cost, Tax, Housing (RentCast, HUD & Census) & Career LMI
+              150+ U.S. Cities & D.C. + London • Cost, Tax, Housing, Career LMI & Legislative Power Timeline
             </p>
           </div>
           <div className="header-actions">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleExportCurrentCsv}
+              title="Download a timestamped CSV snapshot of all currently tracked cities"
+            >
+              <Download size={15} /> <span>Export CSV</span>
+            </button>
             <button
               type="button"
               className={linkCopied ? 'btn-primary' : 'btn-secondary'}
@@ -1081,6 +1125,33 @@ export default function App() {
                   onChange={(e) => setApiKeys({ ...apiKeys, blsApiKey: e.target.value })}
                 />
               </div>
+              <div>
+                <label>Congress.gov API Key (Federal)</label>
+                <input
+                  type="password"
+                  placeholder="Optional api.data.gov key..."
+                  value={apiKeys.congressGovKey}
+                  onChange={(e) => setApiKeys({ ...apiKeys, congressGovKey: e.target.value })}
+                />
+              </div>
+              <div>
+                <label>Open States v3 Key (Gov & State)</label>
+                <input
+                  type="password"
+                  placeholder="Optional Open States API key..."
+                  value={apiKeys.openStatesKey}
+                  onChange={(e) => setApiKeys({ ...apiKeys, openStatesKey: e.target.value })}
+                />
+              </div>
+              <div>
+                <label>LegiScan API Key (Bills & Votes)</label>
+                <input
+                  type="password"
+                  placeholder="Optional LegiScan key..."
+                  value={apiKeys.legiscanKey}
+                  onChange={(e) => setApiKeys({ ...apiKeys, legiscanKey: e.target.value })}
+                />
+              </div>
             </div>
             <div className="api-drawer-footer">
               <div className="cache-telemetry">
@@ -1191,20 +1262,26 @@ export default function App() {
           </div>
         </section>
 
-        {/* Filter & View Toggle Bar */}
+        {/* Filter & View Toggle Bar (Chart, OpenStreetMap & Historical CSV Timeline) */}
         <section className="toolbar-bar">
           <div className="view-toggle-group">
             <button
               className={activeView === 'chart' ? 'toggle-btn active' : 'toggle-btn'}
               onClick={() => setActiveView('chart')}
             >
-              <BarChart3 size={16} /> <span>Chart View ({trackedVizCities.length} Tracked)</span>
+              <BarChart3 size={16} /> <span>Chart View ({trackedVizCities.length})</span>
             </button>
             <button
               className={activeView === 'map' ? 'toggle-btn active' : 'toggle-btn'}
               onClick={() => setActiveView('map')}
             >
-              <MapPin size={16} /> <span>OpenStreetMap ({trackedVizCities.length} Tracked)</span>
+              <MapPin size={16} /> <span>OpenStreetMap ({trackedVizCities.length})</span>
+            </button>
+            <button
+              className={activeView === 'timeline' ? 'toggle-btn active' : 'toggle-btn'}
+              onClick={() => setActiveView('timeline')}
+            >
+              <TrendingUp size={16} /> <span>Timeline ({snapshots.length} CSVs)</span>
             </button>
           </div>
 
@@ -1236,20 +1313,31 @@ export default function App() {
           </div>
         </section>
 
-        {/* Chart & Map View Driven by Explicitly Tracked Cities */}
+        {/* Active Visualization: Chart, OpenStreetMap, or CSV Snapshot Timeline */}
         {activeView === 'chart' ? (
           <CostChartView
             cities={trackedVizCities}
             baseCity={baseCityEvaluated}
             targetSalary={deferredSalary}
           />
-        ) : (
+        ) : activeView === 'map' ? (
           <CostMapView
             cities={trackedVizCities}
             baseCity={baseCityEvaluated}
             targetSalary={deferredSalary}
             onInspectTax={(cityObj) => setInspectedTaxCityId(cityObj.id)}
             onInspectBudget={(cityObj) => setInspectedBudgetCityId(cityObj.id)}
+          />
+        ) : (
+          <TimelineView
+            trackedCities={trackedVizCities}
+            baseCity={baseCityEvaluated}
+            snapshots={snapshots}
+            onSnapshotsChange={setSnapshots}
+            onExportCurrentCsv={handleExportCurrentCsv}
+            onInspectQuarter={(qKey, cityObj) =>
+              setInspectedQuarterState({ quarterKey: qKey, focusCity: cityObj })
+            }
           />
         )}
 
@@ -1307,6 +1395,17 @@ export default function App() {
           initialTargetCity={compareTargetCity}
           targetSalary={deferredSalary}
           onClose={() => setCompareTargetCityId(null)}
+        />
+      )}
+
+      {inspectedQuarterState && (
+        <LegislationQuarterModal
+          quarterKey={inspectedQuarterState.quarterKey}
+          focusCity={inspectedQuarterState.focusCity}
+          hasLiveLegApi={Boolean(
+            apiKeys.congressGovKey || apiKeys.openStatesKey || apiKeys.legiscanKey
+          )}
+          onClose={() => setInspectedQuarterState(null)}
         />
       )}
 

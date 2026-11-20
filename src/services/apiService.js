@@ -856,3 +856,136 @@ export async function geocodeCityNominatim(cityName, countryName) {
   }
   return { lat: 48.8566, lng: 2.3522 };
 }
+
+// Append/update in src/services/apiService.js
+
+// Inside getStoredApiKeys():
+// congressGovKey: (saved.congressGovKey || (isDev ? import.meta.env.VITE_CONGRESS_GOV_API_KEY : '') || '').trim(),
+// openStatesKey: (saved.openStatesKey || (isDev ? import.meta.env.VITE_OPENSTATES_API_KEY : '') || '').trim(),
+// legiscanKey: (saved.legiscanKey || (isDev ? import.meta.env.VITE_LEGISCAN_API_KEY : '') || '').trim(),
+
+// Inside hasCustomApiKeys():
+// || keysObj.congressGovKey || keysObj.openStatesKey || keysObj.legiscanKey
+
+/**
+ * 12. GovTrack / @unitedstates Bulk Roster Data (Keyless Open Source JSON)
+ * Repo: https://github.com/unitedstates/congress-legislators
+ */
+export async function fetchUnitedStatesLegislatorsRoster() {
+  const cacheKey = "unitedstates_congress_roster_v1";
+  const cached = cacheService.get(cacheKey);
+  if (cached) return cached;
+
+  try {
+    const res = await fetch(
+      "https://unitedstates.github.io/congress-legislators/legislators-current.json",
+    );
+    if (!res.ok) throw new Error(`@unitedstates roster HTTP ${res.status}`);
+    const list = await res.json();
+    if (Array.isArray(list) && list.length > 0) {
+      cacheService.set(cacheKey, list);
+      return list;
+    }
+  } catch (err) {
+    console.warn("@unitedstates roster fallback:", err.message);
+  }
+  return null;
+}
+
+/**
+ * 13. Congress.gov API v3 (Federal Bills & Roll-Call Context)
+ * Docs: https://api.congress.gov/
+ */
+export async function fetchCongressBillsV3(congressGovKey, congressNum = 119) {
+  if (!congressGovKey) return null;
+  const cacheKey = `congress_gov_bills_${congressNum}`;
+  const cached = cacheService.get(cacheKey);
+  if (cached) return cached;
+
+  try {
+    const url = `https://api.congress.gov/v3/bill/${congressNum}?format=json&limit=10&api_key=${encodeURIComponent(
+      congressGovKey,
+    )}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Congress.gov HTTP ${res.status}`);
+    const json = await res.json();
+    if (Array.isArray(json?.bills)) {
+      cacheService.set(cacheKey, json.bills);
+      return json.bills;
+    }
+  } catch (err) {
+    console.warn("Congress.gov fallback:", err.message);
+  }
+  return null;
+}
+
+/**
+ * 14. Open States API v3 (State Legislators, Governors & State Bills)
+ * Docs: https://docs.openstates.org/api-v3/
+ */
+export async function fetchOpenStatesJurisdictionData(
+  stateCode,
+  openStatesKey,
+) {
+  if (!openStatesKey || !stateCode) return null;
+  const jurisdiction = `ocd-jurisdiction/country:us/state:${stateCode.toLowerCase()}/government`;
+  const cacheKey = `openstates_v3_${stateCode.toLowerCase()}`;
+  const cached = cacheService.get(cacheKey);
+  if (cached) return cached;
+
+  try {
+    const headers = { "X-API-KEY": openStatesKey, Accept: "application/json" };
+    const [peopleRes, billsRes] = await Promise.allSettled([
+      fetch(
+        `https://v3.openstates.org/people?jurisdiction=${encodeURIComponent(jurisdiction)}&per_page=25`,
+        { headers },
+      ),
+      fetch(
+        `https://v3.openstates.org/bills?jurisdiction=${encodeURIComponent(jurisdiction)}&per_page=15`,
+        { headers },
+      ),
+    ]);
+
+    const out = { source: "Open States v3 Live API" };
+    if (peopleRes.status === "fulfilled" && peopleRes.value.ok) {
+      const pJson = await peopleRes.value.json();
+      out.people = Array.isArray(pJson?.results) ? pJson.results : [];
+    }
+    if (billsRes.status === "fulfilled" && billsRes.value.ok) {
+      const bJson = await billsRes.value.json();
+      out.bills = Array.isArray(bJson?.results) ? bJson.results : [];
+    }
+    cacheService.set(cacheKey, out);
+    return out;
+  } catch (err) {
+    console.warn(`Open States v3 fallback for ${stateCode}:`, err.message);
+    return null;
+  }
+}
+
+/**
+ * 15. LegiScan API (Federal + All 50 States Bills & Roll Calls)
+ * Docs: https://legiscan.com/legiscan
+ */
+export async function fetchLegiScanBillDetail(billId, legiscanKey) {
+  if (!legiscanKey || !billId) return null;
+  const cacheKey = `legiscan_bill_${billId}`;
+  const cached = cacheService.get(cacheKey);
+  if (cached) return cached;
+
+  try {
+    const url = `https://api.legiscan.com/?key=${encodeURIComponent(
+      legiscanKey,
+    )}&op=getBill&id=${encodeURIComponent(billId)}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`LegiScan HTTP ${res.status}`);
+    const json = await res.json();
+    if (json?.status === "OK" && json?.bill) {
+      cacheService.set(cacheKey, json.bill);
+      return json.bill;
+    }
+  } catch (err) {
+    console.warn(`LegiScan fallback for bill ${billId}:`, err.message);
+  }
+  return null;
+}

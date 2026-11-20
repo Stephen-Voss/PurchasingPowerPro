@@ -2116,3 +2116,526 @@ select:focus {
   border-radius: 50%;
   background: var(--m3-primary);
 }
+
+/* Historical CSV Snapshot Timeline View */
+.timeline-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--m3-outline);
+}
+
+.timeline-controls-left {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.timeline-select-group {
+  min-width: 240px;
+}
+
+.timeline-select-group label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  color: var(--m3-text-muted);
+  margin-bottom: 0.3rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.timeline-checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+  color: #cbd5e1;
+  cursor: pointer;
+  padding-bottom: 0.45rem;
+}
+
+.timeline-checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--m3-primary);
+  cursor: pointer;
+}
+
+.timeline-actions-right {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.timeline-feedback-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--m3-primary-container);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  border-radius: var(--m3-radius-sm);
+  font-size: 0.8rem;
+  color: #e0f2fe;
+}
+
+.loaded-snapshots-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding: 0.55rem 0.75rem;
+  background: var(--m3-surface-2);
+  border: 1px solid var(--m3-outline);
+  border-radius: var(--m3-radius-sm);
+}
+
+.snapshots-bar-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--m3-primary);
+}
+
+.snapshot-chips-list {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.snapshot-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--m3-surface-1);
+  border: 1px solid var(--m3-outline);
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.75rem;
+  color: #e2e8f0;
+}
+
+.snapshot-chip button {
+  background: transparent;
+  border: none;
+  padding: 0.1rem;
+  color: var(--m3-text-muted);
+}
+
+.snapshot-chip button:hover {
+  color: var(--m3-red);
+}
+
+.timeline-delta-section {
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--m3-outline);
+}
+
+.timeline-delta-section h4 {
+  margin: 0 0 0.6rem;
+  font-size: 0.85rem;
+  color: var(--m3-text);
+}
+
+/* Political Power Strip & Legislation Modal */
+.power-timeline-strip {
+  margin-top: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  background: var(--m3-surface-2);
+  border: 1px solid var(--m3-outline);
+  border-radius: var(--m3-radius-sm);
+}
+
+.power-strip-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--m3-text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.power-quarters-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.quarter-power-btn {
+  background: var(--m3-surface-1);
+  border: 1px solid var(--m3-outline);
+  border-radius: var(--m3-radius-sm);
+  padding: 0.45rem 0.65rem;
+  color: var(--m3-text);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+}
+
+.quarter-power-btn:hover {
+  border-color: var(--m3-primary);
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.qp-top {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.qp-top strong {
+  font-size: 0.8rem;
+  color: var(--m3-primary);
+}
+
+.qp-top small {
+  font-size: 0.7rem;
+  color: var(--m3-text-muted);
+}
+
+.qp-badges {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.mini-party {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.08rem 0.42rem;
+  border-radius: 4px;
+}
+
+.mini-party.p-d {
+  background: rgba(59, 130, 246, 0.22);
+  color: #93c5fd;
+  border: 1px solid rgba(59, 130, 246, 0.45);
+}
+
+.mini-party.p-r {
+  background: rgba(239, 68, 68, 0.22);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+}
+
+.mini-party.p-i {
+  background: rgba(168, 85, 247, 0.22);
+  color: #d8b4fe;
+  border: 1px solid rgba(168, 85, 247, 0.45);
+}
+
+.leg-modal-wide {
+  max-width: 980px;
+}
+
+.leg-controls-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.9rem;
+}
+
+.leg-domain-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 220px;
+  color: var(--m3-text-muted);
+}
+
+.power-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin-bottom: 0.95rem;
+}
+
+.power-card {
+  background: var(--m3-surface-2);
+  border: 1px solid var(--m3-outline);
+  border-radius: var(--m3-radius-md);
+  padding: 0.7rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+}
+
+.power-card span {
+  font-size: 0.71rem;
+  text-transform: uppercase;
+  color: var(--m3-text-muted);
+  font-weight: 600;
+}
+
+.power-card strong {
+  font-size: 0.9rem;
+  color: var(--m3-text);
+}
+
+.power-card small {
+  font-size: 0.71rem;
+  color: var(--m3-text-muted);
+}
+
+.party-badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.12rem 0.48rem;
+  border-radius: 999px;
+}
+
+.party-badge.dem {
+  background: rgba(59, 130, 246, 0.2);
+  color: #93c5fd;
+  border: 1px solid rgba(59, 130, 246, 0.45);
+}
+
+.party-badge.rep {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+}
+
+.party-badge.ind {
+  background: rgba(168, 85, 247, 0.2);
+  color: #d8b4fe;
+  border: 1px solid rgba(168, 85, 247, 0.45);
+}
+
+.party-badge.split {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fde68a;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+}
+
+.leg-bills-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.leg-bill-item {
+  background: var(--m3-surface-1);
+  border: 1px solid var(--m3-outline);
+  border-radius: var(--m3-radius-sm);
+  padding: 0.65rem 0.8rem;
+}
+
+.leg-bill-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.leg-bill-top strong {
+  font-size: 0.84rem;
+  margin-left: 0.4rem;
+}
+
+.domain-pill {
+  margin-left: 0.35rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--m3-primary);
+  background: var(--m3-primary-container);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  padding: 0.08rem 0.42rem;
+  border-radius: 4px;
+}
+
+.outcome-tag {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #6ee7b7;
+  background: rgba(16, 185, 129, 0.14);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  padding: 0.14rem 0.5rem;
+  border-radius: 999px;
+}
+
+.leg-bill-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 0.45rem;
+  font-size: 0.75rem;
+  color: var(--m3-text-muted);
+}
+
+@media (max-width: 960px) {
+  .power-cards-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .power-cards-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Party Legend Pills, Color-Coded Quarter Buttons & Bill Roll-Call Inspector */
+.party-legend-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.quarter-power-btn.bg-party-d {
+  background: rgba(59, 130, 246, 0.14);
+  border-color: rgba(59, 130, 246, 0.42);
+}
+
+.quarter-power-btn.bg-party-r {
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.42);
+}
+
+.quarter-power-btn.bg-party-i,
+.quarter-power-btn.bg-party-split {
+  background: rgba(168, 85, 247, 0.14);
+  border-color: rgba(168, 85, 247, 0.42);
+}
+
+.clickable-bill-card {
+  width: 100%;
+  display: block;
+  text-align: left;
+  color: var(--m3-text);
+  font-weight: 400;
+  transition:
+    border-color 0.15s ease,
+    transform 0.12s ease;
+}
+
+.clickable-bill-card:hover {
+  border-color: var(--m3-primary);
+  background: var(--m3-surface-2);
+  transform: translateY(-1px);
+}
+
+.bill-detail-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-bottom: 0.85rem;
+}
+
+.bill-detail-badges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.bill-detail-header-card {
+  background: var(--m3-surface-2);
+  border: 1px solid var(--m3-outline);
+  border-radius: var(--m3-radius-md);
+  padding: 0.95rem 1.05rem;
+  margin-bottom: 0.95rem;
+}
+
+.bill-detail-header-card h4 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  color: var(--m3-text);
+}
+
+.bill-summary-text {
+  margin: 0 0 0.65rem;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  color: #cbd5e1;
+}
+
+.bill-impact-callout {
+  background: var(--m3-primary-container);
+  border-left: 3px solid var(--m3-primary);
+  border-radius: 5px;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.8rem;
+  color: #e0f2fe;
+  margin-bottom: 0.7rem;
+}
+
+.bill-meta-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  font-size: 0.78rem;
+  color: var(--m3-text-muted);
+}
+
+.rollcall-split-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.rollcall-box {
+  background: var(--m3-surface-2);
+  border: 1px solid var(--m3-outline);
+  border-radius: var(--m3-radius-md);
+  padding: 0.8rem;
+  overflow-x: auto;
+}
+
+.rollcall-box h5 {
+  margin: 0 0 0.6rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.84rem;
+}
+
+.rollcall-box.yea-box h5 {
+  color: #34d399;
+}
+
+.rollcall-box.nay-box h5 {
+  color: #f87171;
+}
+
+@media (max-width: 900px) {
+  .rollcall-split-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Neutral styling for pretend empty quarter (no highlight or accusation) */
+.quarter-power-btn.no-data-quarter {
+  background: rgba(30, 41, 59, 0.55);
+  border-color: rgba(148, 163, 184, 0.25);
+  opacity: 0.78;
+}
+
+.neutral-empty-box {
+  background: var(--m3-surface-1);
+  border: 1px solid var(--m3-outline);
+  border-radius: var(--m3-radius-sm);
+  padding: 1.25rem;
+  text-align: center;
+  color: var(--m3-text-muted);
+  font-size: 0.84rem;
+}

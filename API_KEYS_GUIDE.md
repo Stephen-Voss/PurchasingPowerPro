@@ -149,3 +149,46 @@ PurchasingPower Pro runs out of the box on GitHub Pages with **zero API keys req
 - **Adzuna Job Search API**: `https://developer.adzuna.com/` → UI **Adzuna App ID** & **Adzuna App Key** / `.env` `VITE_ADZUNA_APP_ID` & `VITE_ADZUNA_APP_KEY`.
 - **CareerOneStop Web API**: `https://www.careeronestop.org/Developers/WebAPI/web-api.aspx` → UI **CareerOneStop User ID** & **CareerOneStop API Token** / `.env` `VITE_CAREERONESTOP_USER_ID` & `VITE_CAREERONESTOP_TOKEN`.
 - **BLS Public Data API v2 (OEWS & LAUS)**: `https://data.bls.gov/registrationEngine/` → UI **BLS API v2 Key** / `.env` `VITE_BLS_API_KEY`.
+
+## 5. Legislative, Executive & Roll-Call APIs
+
+### Congress.gov API v3 (Federal House & Senate Bills, Members & Actions)
+
+- **Developer Portal**: `https://api.congress.gov/` (Key signup via `https://api.data.gov/signup/`)
+- **How to Retrieve**: Request a free `api.data.gov` key and paste it into **Congress.gov API Key** in the BYOK drawer (or `.env` `VITE_CONGRESS_GOV_API_KEY`).
+
+### Open States API v3 (State Governors, Legislators & State Bills)
+
+- **Developer Portal**: `https://docs.openstates.org/api-v3/`
+- **How to Retrieve**: Register for a free Open States API key and pass it via `X-API-KEY` in the **Open States v3 API Key** field (or `.env` `VITE_OPENSTATES_API_KEY`). Joins on standardized `ocd-person/...` and `ocd-jurisdiction/...` IDs.
+
+### LegiScan API (Federal + All 50 States Bills & Roll Calls)
+
+- **Developer Portal**: `https://legiscan.com/legiscan` (Free public service tier: 30,000 queries/month)
+- **How to Retrieve**: Create a free LegiScan OneVote account, generate an API key in your profile, and enter it in **LegiScan API Key** (or `.env` `VITE_LEGISCAN_API_KEY`).
+
+### GovTrack / `@unitedstates` Bulk Data (Keyless Open Source Rosters)
+
+- **Repository**: `https://github.com/unitedstates/congress-legislators`
+- **How to Use**: Public CC0 JSON rosters (`legislators-current.json`) with `bioguide_id` and party/term metadata—no API key required.
+
+### API-Shaped Mock Data in Demo Mode
+
+When no legislative API keys are entered, the app uses mock structures modeled on Congress.gov v3, Open States v3, and LegiScan so you can preview quarterly Federal/State party control and cost-of-living bills across **Taxation & Fees**, **Housing & Zoning**, **Energy & Utilities**, and **Labor & Healthcare**:
+
+```json
+{
+  "jurisdiction_id": "ocd-jurisdiction/country:us/state:mo/government",
+  "quarter": "2025-Q2",
+  "governor": {
+    "id": "ocd-person/gov-mo-01",
+    "party": "R",
+    "role": "Governor"
+  },
+  "bill": {
+    "identifier": "HB 412",
+    "domain": "Housing & Zoning",
+    "votes": { "yea": 28, "nay": 14 }
+  }
+}
+```
