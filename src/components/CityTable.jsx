@@ -4,13 +4,7 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
-  PieChart,
-  Sparkles,
-  Briefcase,
-  ArrowLeftRight,
-  LayoutGrid,
-  Table as TableIcon,
-  MapPin
+  ArrowLeftRight
 } from 'lucide-react';
 
 const fmtUSD = (val) => {
@@ -25,7 +19,6 @@ const fmtUSD = (val) => {
 
 export function CityTable({
   cities,
-  totalTrackedCount,
   baseCity,
   targetSalary,
   onCompareCity,
@@ -35,8 +28,6 @@ export function CityTable({
 }) {
   const [sortField, setSortField] = useState('equivalentGrossNeeded');
   const [sortAsc, setSortAsc] = useState(false);
-
-  const [cardViewMode, setCardViewMode] = useState(false);
 
   const handleSort = (field) => {
     if (sortField === field) {
@@ -82,137 +73,9 @@ export function CityTable({
 
   return (
     <div className="m3-table-surface">
-      <div className="table-controls-banner">
-        <div className="table-banner-left">
-          <span className="table-hint-pill">
-            <MapPin size={13} /> Tracked Cities Shown: <strong>{sortedCities.length}</strong>
-            {typeof totalTrackedCount === 'number' && totalTrackedCount !== sortedCities.length
-              ? ` of ${totalTrackedCount}`
-              : ''}
-          </span>
-          <span className="table-hint-pill">
-            <ArrowLeftRight size={13} /> Click <strong>Compare</strong> for 2-City Side-by-Side
-          </span>
-          <span className="table-hint-pill">
-            <Briefcase size={13} /> Click <strong>Career Viability</strong> for Jobs &amp; BLS
-          </span>
-          <span className="table-hint-pill">
-            <PieChart size={13} /> Click <strong>Total COL Basket</strong> for Pie &amp; Table
-          </span>
-          <span className="table-hint-pill">
-            <Sparkles size={13} /> Click <strong>Taxes</strong> for Tax Inspector
-          </span>
-          <span className="table-hint-pill">
-            Sorted by <strong>{sortField.split('.').pop()}</strong> ({sortAsc ? 'Ascending ↑' : 'Descending ↓'})
-          </span>
-        </div>
-
-        <div className="table-banner-right">
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={() => setCardViewMode(!cardViewMode)}
-          >
-            {cardViewMode ? <TableIcon size={15} /> : <LayoutGrid size={15} />}
-            <span>{cardViewMode ? 'Scrollable Table' : 'Card Grid View'}</span>
-          </button>
-        </div>
-      </div>
-
       {sortedCities.length === 0 ? (
         <div style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8' }}>
-          No tracked cities match your current filter. Select cities in <strong>Tracked Cities</strong> above or clear your table filter.
-        </div>
-      ) : cardViewMode ? (
-        <div className="mobile-cards-container">
-          {sortedCities.map((c) => {
-            const isBase = c.id === baseCity.id;
-            const leftoverVal = Number(c.fixedSalary.leftover) || 0;
-            const leftoverPos = leftoverVal >= 0;
-            const leftoverDelta = leftoverVal - baseLeftover;
-            const cr = c.career;
-
-            return (
-              <div key={c.id} className={isBase ? 'city-mobile-card base-card' : 'city-mobile-card'}>
-                <div className="mc-header">
-                  <div>
-                    <strong>
-                      {c.city}, {c.state}
-                    </strong>{' '}
-                    <span className="city-code-badge">{c.code}</span>
-                  </div>
-                  {!isBase && (
-                    <button
-                      type="button"
-                      className="compare-row-btn"
-                      onClick={() => onCompareCity(c)}
-                    >
-                      <ArrowLeftRight size={12} /> Compare
-                    </button>
-                  )}
-                </div>
-
-                <div className="mc-grid">
-                  <div>
-                    <span className="mc-label">Salary Needed (vs {baseCity.code})</span>
-                    <strong className="equiv-salary">{fmtUSD(c.equivalentGrossNeeded)}</strong>
-                  </div>
-                  <div>
-                    <span className="mc-label">Leftover on {fmtUSD(targetSalary)}</span>
-                    <strong className={leftoverPos ? 'leftover-positive' : 'leftover-negative'}>
-                      {leftoverPos ? '+' : ''}
-                      {fmtUSD(leftoverVal)}
-                    </strong>
-                    <small
-                      style={{
-                        display: 'block',
-                        fontSize: '0.72rem',
-                        color: isBase
-                          ? '#94a3b8'
-                          : leftoverDelta >= 0
-                          ? '#34d399'
-                          : '#f87171'
-                      }}
-                    >
-                      {isBase
-                        ? `Base (${baseCity.code}) Benchmark`
-                        : leftoverDelta >= 0
-                        ? `+${fmtUSD(leftoverDelta)} vs ${baseCity.code}`
-                        : `${fmtUSD(leftoverDelta)} vs ${baseCity.code}`}
-                    </small>
-                  </div>
-                  <div>
-                    <span className="mc-label">Min / Median Wage</span>
-                    <strong>
-                      ${Number(c.minWageHourly || 0).toFixed(2)}/hr • {fmtUSD(c.medianWageAnnual)}
-                    </strong>
-                  </div>
-                  <div onClick={() => onInspectCareer(c)} className="mc-career-clickable">
-                    <span className="mc-label">Career Viability (Tap)</span>
-                    <strong>
-                      {cr.viabilityScore}/100 • ~{fmtUSD(cr.roleMedianSalary)}
-                    </strong>
-                    <small style={{ display: 'block', fontSize: '0.68rem', color: '#94a3b8' }}>
-                      {cr.apiStatus.anyLive ? 'Live API' : 'No API Key (Est.)'}
-                    </small>
-                  </div>
-                  <div onClick={() => onInspectTax(c)} className="mc-tax-clickable">
-                    <span className="mc-label">Taxes (Tap to Inspect)</span>
-                    <strong>
-                      {fmtUSD(f.totalTax)} ({f.effectiveTaxRate}%)
-                    </strong>
-                  </div>
-                </div>
-
-                <div className="mc-budget-summary" onClick={() => onInspectBudget(c)}>
-                  <div className="mc-budget-row">
-                    <span>Total 6-Category COL Basket (Tap for Pie &amp; Table):</span>
-                    <strong>{fmtUSD(f.totalColExpenses)}/yr ▸</strong>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+          No tracked cities match your current filter. Select cities in Tracked Cities above or clear your table filter.
         </div>
       ) : (
         <div className="table-scroll-viewport">
@@ -225,7 +88,7 @@ export function CityTable({
                   title="Tracked city name, state/region code, and comparison action. Click to sort alphabetically; click Compare to open a side-by-side 2-city relocation modal."
                 >
                   <span className="th-content">
-                    City &amp; Region {renderSortIndicator('city')}
+                    City & Region {renderSortIndicator('city')}
                   </span>
                 </th>
                 <th
@@ -254,7 +117,7 @@ export function CityTable({
                   title="Effective hourly/full-time annual minimum wage for the city/state and typical annual median earnings, plus how your target salary compares to the local median."
                 >
                   <span className="th-content">
-                    Min &amp; Median Wage {renderSortIndicator('medianWageAnnual')}
+                    Min & Median Wage {renderSortIndicator('medianWageAnnual')}
                   </span>
                 </th>
                 <th
@@ -280,9 +143,9 @@ export function CityTable({
                 <th
                   className={getHeaderClass('fixedSalary.totalColExpenses', 'collapsible-budget-header')}
                   onClick={() => handleSort('fixedSalary.totalColExpenses')}
-                  title={`Estimated annual cost of your 6-category living basket (Housing, Food, Transportation, Utilities, Healthcare, Misc) on a ${fmtUSD(
+                  title={`Estimated annual cost of your 6-category living basket on a ${fmtUSD(
                     targetSalary
-                  )} salary. Click to sort or click any city row's basket cell for a Pie Chart & Budget Table.`}
+                  )} salary. Flags low housing if your housing slider is below HUD FMR. Click for Pie Chart & Housing breakdown.`}
                 >
                   <span className="th-content">
                     Total COL Basket (Click for Pie) {renderSortIndicator('fixedSalary.totalColExpenses')}
@@ -306,6 +169,8 @@ export function CityTable({
                 const isBase = c.id === baseCity.id;
                 const f = c.fixedSalary;
                 const cr = c.career;
+                const h = c.housing;
+                const lowHousing = Boolean(h?.isHousingUnderBudget);
                 const leftoverVal = Number(f.leftover) || 0;
                 const leftoverPos = leftoverVal >= 0;
                 const leftoverDelta = leftoverVal - baseLeftover;
@@ -398,13 +263,21 @@ export function CityTable({
                     </td>
 
                     <td
-                      className="collapsed-budget-cell"
+                      className={lowHousing ? 'collapsed-budget-cell under-housing-cell' : 'collapsed-budget-cell'}
                       onClick={() => onInspectBudget(c)}
-                      title="Click to view 6-category Pie Chart & Budget Table"
+                      title={
+                        lowHousing
+                          ? `Housing spend (${fmtUSD(f.housingSpend)}/yr) is below ${fmtUSD(h?.recommendedAnnualHousingBenchmark)}/yr FMR benchmark. Click for Pie Chart & Housing breakdown.`
+                          : 'Click to view 6-category Pie Chart & Housing breakdown'
+                      }
                     >
                       <div className="collapsed-budget-top">
                         <strong>{fmtUSD(f.totalColExpenses)}/yr</strong>
-                        <span className="expand-link">Pie &amp; Table ▸</span>
+                        {lowHousing ? (
+                          <span className="under-housing-pill">Low Housing</span>
+                        ) : (
+                          <span className="expand-link">Pie & Housing ▸</span>
+                        )}
                       </div>
                       <div className="mini-stack-bar">
                         <span style={{ width: `${(f.housingSpend / tot) * 100}%`, background: '#3b82f6' }} />

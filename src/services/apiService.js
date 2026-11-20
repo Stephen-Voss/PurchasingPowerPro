@@ -48,6 +48,21 @@ export const getStoredApiKeys = () => {
         (isDev ? import.meta.env.VITE_BLS_API_KEY : "") ||
         ""
       ).trim(),
+      rentcast: (
+        saved.rentcast ||
+        (isDev ? import.meta.env.VITE_RENTCAST_API_KEY : "") ||
+        ""
+      ).trim(),
+      hudUserToken: (
+        saved.hudUserToken ||
+        (isDev ? import.meta.env.VITE_HUD_USER_TOKEN : "") ||
+        ""
+      ).trim(),
+      censusApiKey: (
+        saved.censusApiKey ||
+        (isDev ? import.meta.env.VITE_CENSUS_API_KEY : "") ||
+        ""
+      ).trim(),
     };
   } catch {
     return {
@@ -59,6 +74,9 @@ export const getStoredApiKeys = () => {
       careerOneStopUserId: "",
       careerOneStopToken: "",
       blsApiKey: "",
+      rentcast: "",
+      hudUserToken: "",
+      censusApiKey: "",
     };
   }
 };
@@ -93,7 +111,10 @@ export const hasCustomApiKeys = (keysObj) => {
     keysObj.bea ||
     (keysObj.adzunaAppId && keysObj.adzunaAppKey) ||
     (keysObj.careerOneStopUserId && keysObj.careerOneStopToken) ||
-    keysObj.blsApiKey,
+    keysObj.blsApiKey ||
+    keysObj.rentcast ||
+    keysObj.hudUserToken ||
+    keysObj.censusApiKey,
   );
 };
 
@@ -238,7 +259,7 @@ export async function fetchAPINinjasTax(
   try {
     const url = `https://api.api-ninjas.com/v1/incometaxcalculator?country=${encodeURIComponent(
       cityObj.country,
-    )}&region=${encodeURIComponent(
+    )}®ion=${encodeURIComponent(
       cityObj.state,
     )}&income=${roundedIncome}&filing_status=${apiFiling}`;
     const res = await fetch(url, {
@@ -266,8 +287,7 @@ export async function fetchAPINinjasTax(
 }
 
 /**
- * 5. Adzuna Job Aggregator API (Vacancies, Salary Histogram, Historical Trend, Top Companies)
- * Docs: https://developer.adzuna.com/docs/search
+ * 5. Adzuna Job Aggregator API
  */
 export async function fetchAdzunaCareerData(
   cityObj,
@@ -379,8 +399,7 @@ export async function fetchAdzunaCareerData(
 }
 
 /**
- * 6. CareerOneStop LMI API (Metro Employment, Openings, Wage Percentiles, Unemployment, Skills)
- * Docs: https://www.careeronestop.org/Developers/WebAPI/web-api.aspx
+ * 6. CareerOneStop LMI API
  */
 export async function fetchCareerOneStopData(
   cityObj,
@@ -482,8 +501,7 @@ export async function fetchCareerOneStopData(
 }
 
 /**
- * 7. U.S. Bureau of Labor Statistics (BLS) Public Data API v2 (OEWS & LAUS Raw Time Series)
- * Docs: https://www.bls.gov/developers/
+ * 7. U.S. Bureau of Labor Statistics (BLS) Public Data API v2 (OEWS & LAUS)
  */
 export async function fetchBLSLaborTimeSeries(
   cityObj,
@@ -549,7 +567,268 @@ export async function fetchBLSLaborTimeSeries(
 }
 
 /**
- * 8. OpenStreetMap Nominatim Geocoding (Keyless Public API)
+ * 8. RentCast API (/v1/markets) — Average/Median Rents by Bedroom, Home Sale Prices, DOM, Listings & Trends
+ */
+export async function fetchRentCastMarketData(cityObj, rentcastKey) {
+  if (!rentcastKey || cityObj.isInternational) return null;
+  const cacheKey = `rentcast_market_${cityObj.id}`;
+  const cached = cacheService.get(cacheKey);
+  if (cached) return cached;
+
+  try {
+    const url = `https://api.rentcast.io/v1/markets?city=${encodeURIComponent(
+      cityObj.city,
+    )}&state=${encodeURIComponent(cityObj.state)}&historyRange=6`;
+    const res = await fetch(url, {
+      headers: {
+        "X-Api-Key": rentcastKey,
+        Accept: "application/json",
+      },
+    });
+    if (!res.ok) throw new Error(`RentCast HTTP ${res.status}`);
+    const json = await res.json();
+    const rental = json?.rentalData || json?.data?.rentalData || {};
+    const sale = json?.saleData || json?.data?.saleData || {};
+
+    const avgRentMonthly = Number(rental.averageRent || rental.medianRent);
+    if (!Number.isFinite(avgRentMonthly) || avgRentMonthly <= 0) return null;
+
+    const medianRentMonthly = Math.round(
+      Number(rental.medianRent || avgRentMonthly * 0.96),
+    );
+    const avgHomeSalePrice = Math.round(
+      Number(sale.averagePrice || sale.medianPrice || 0),
+    );
+    const medianHomeSalePrice = Math.round(
+      Number(sale.medianPrice || avgHomeSalePrice * 0.94),
+    );
+    const daysOnMarket = Math.round(
+      Number(rental.averageDaysOnMarket || sale.averageDaysOnMarket || 35),
+    );
+    const activeListingsCount = Math.round(
+      Number(rental.totalListings || sale.totalListings || 0),
+    );
+
+    const byBed = Array.isArray(rental.dataByBedrooms)
+      ? rental.dataByBedrooms
+      : [];
+    const findBedRent = (beds, mult) => {
+      const match = byBed.find((b) => Number(b.bedrooms) === beds);
+      const val = Number(match?.medianRent || match?.averageRent);
+      return Number.isFinite(val) && val > 0
+        ? Math.round(val)
+        : Math.round(medianRentMonthly * mult);
+    };
+
+    const rentByBedroom = {
+      studio: findBedRent(0, 0.75),
+      br1: findBedRent(1, 0.85),
+      br2: findBedRent(2, 1.0),
+      br3: findBedRent(3, 1.28),
+      br4: findBedRent(4, 1.54),
+    };
+
+    const histEntries =
+      rental.history && typeof rental.history === "object"
+        ? Object.entries(rental.history)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .slice(-5)
+            .map(([period, stats]) => ({
+              year: period,
+              monthlyRent: Math.round(
+                Number(
+                  stats?.medianRent || stats?.averageRent || medianRentMonthly,
+                ),
+              ),
+              homePrice: Math.round(
+                Number(
+                  sale.history?.[period]?.medianPrice || medianHomeSalePrice,
+                ),
+              ),
+            }))
+        : [];
+
+    const out = {
+      avgRentMonthly: Math.round(avgRentMonthly),
+      medianRentMonthly,
+      avgHomeSalePrice,
+      medianHomeSalePrice,
+      daysOnMarket,
+      activeListingsCount,
+      rentByBedroom,
+      rentTrendHistory: histEntries.length > 0 ? histEntries : undefined,
+      source: "RentCast Live API",
+    };
+
+    cacheService.set(cacheKey, out);
+    return out;
+  } catch (err) {
+    console.warn(`RentCast fallback for ${cityObj.city}:`, err.message);
+    return null;
+  }
+}
+
+/**
+ * 9. HUD User Fair Market Rents (FMR) & Income Limits API
+ * Base: https://www.huduser.gov/hudapi/public/fmr/statedata/{statecode} & /il/statedata/{statecode}
+ */
+export async function fetchHudFairMarketRents(cityObj, hudBearerToken) {
+  if (!hudBearerToken || cityObj.isInternational || !cityObj.state) return null;
+  const stateCode = cityObj.state.toUpperCase();
+  const cacheKey = `hud_fmr_il_${stateCode}`;
+  const cached = cacheService.get(cacheKey);
+  if (cached) return cached;
+
+  try {
+    const headers = {
+      Authorization: `Bearer ${hudBearerToken}`,
+      Accept: "application/json",
+    };
+    const [fmrRes, ilRes] = await Promise.allSettled([
+      fetch(
+        `https://www.huduser.gov/hudapi/public/fmr/statedata/${encodeURIComponent(stateCode)}`,
+        { headers },
+      ),
+      fetch(
+        `https://www.huduser.gov/hudapi/public/il/statedata/${encodeURIComponent(stateCode)}`,
+        { headers },
+      ),
+    ]);
+
+    const out = { source: "HUD User Live API" };
+    let hasAny = false;
+
+    if (fmrRes.status === "fulfilled" && fmrRes.value.ok) {
+      const fJson = await fmrRes.value.json();
+      const list =
+        fJson?.data?.metroareas ||
+        fJson?.data?.counties ||
+        (Array.isArray(fJson?.data) ? fJson.data : []);
+      const cityLower = cityObj.city.toLowerCase();
+      const matched =
+        list.find((item) =>
+          String(item.area_name || item.county_name || "")
+            .toLowerCase()
+            .includes(cityLower),
+        ) || list[0];
+
+      if (matched) {
+        const br0 = Number(matched.Efficiency || matched.fmr_0 || 0);
+        const br1 = Number(matched["One-Bedroom"] || matched.fmr_1 || 0);
+        const br2 = Number(matched["Two-Bedroom"] || matched.fmr_2 || 0);
+        const br3 = Number(matched["Three-Bedroom"] || matched.fmr_3 || 0);
+        const br4 = Number(matched["Four-Bedroom"] || matched.fmr_4 || 0);
+
+        if (br2 > 0) {
+          out.hudFairMarketRents = {
+            br0: br0 > 0 ? Math.round(br0) : Math.round(br2 * 0.74),
+            br1: br1 > 0 ? Math.round(br1) : Math.round(br2 * 0.84),
+            br2: Math.round(br2),
+            br3: br3 > 0 ? Math.round(br3) : Math.round(br2 * 1.29),
+            br4: br4 > 0 ? Math.round(br4) : Math.round(br2 * 1.52),
+          };
+          hasAny = true;
+        }
+      }
+    }
+
+    if (ilRes.status === "fulfilled" && ilRes.value.ok) {
+      const iJson = await ilRes.value.json();
+      const ilList =
+        iJson?.data?.metroareas ||
+        iJson?.data?.counties ||
+        (Array.isArray(iJson?.data) ? iJson.data : []);
+      const medianFam = Number(
+        ilList?.[0]?.median_income || ilList?.[0]?.median4 || 0,
+      );
+      if (medianFam > 0) {
+        out.medianFamilyIncomeLimit = Math.round(medianFam);
+        hasAny = true;
+      }
+    }
+
+    if (!hasAny) return null;
+    cacheService.set(cacheKey, out);
+    return out;
+  } catch (err) {
+    console.warn(`HUD User fallback for ${cityObj.state}:`, err.message);
+    return null;
+  }
+}
+
+/**
+ * 10. U.S. Census Bureau ACS Housing Demographics API
+ * Variables: B25064_001E (Median Gross Rent), B25077_001E (Median Home Value),
+ * B25003_001E (Total Tenure), B25003_003E (Renter-Occupied),
+ * B25002_002E (Occupied Units), B25002_003E (Vacant Units), B08013_001E (Aggregate Travel Time to Work)
+ */
+export async function fetchCensusHousingDemographics(cityObj, censusApiKey) {
+  if (cityObj.isInternational || !cityObj.censusStateFips) return null;
+  const cacheKey = `census_housing_${cityObj.censusStateFips}`;
+  const cached = cacheService.get(cacheKey);
+  if (cached) return cached;
+
+  try {
+    const keyParam = censusApiKey
+      ? `&key=${encodeURIComponent(censusApiKey)}`
+      : "";
+    const url = `https://api.census.gov/data/2022/acs/acs1?get=NAME,B25064_001E,B25077_001E,B25003_001E,B25003_003E,B25002_002E,B25002_003E,B08013_001E&for=state:${encodeURIComponent(
+      cityObj.censusStateFips,
+    )}${keyParam}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Census Housing HTTP ${res.status}`);
+    const rows = await res.json();
+    if (Array.isArray(rows) && rows.length > 1) {
+      const [
+        ,
+        grossRentRaw,
+        homeValRaw,
+        totalTenureRaw,
+        renterRaw,
+        occupiedRaw,
+        vacantRaw,
+      ] = rows[1];
+      const grossRent = parseInt(grossRentRaw, 10);
+      const homeVal = parseInt(homeValRaw, 10);
+      const totalTenure = parseInt(totalTenureRaw, 10);
+      const renterCount = parseInt(renterRaw, 10);
+      const occupiedUnits = parseInt(occupiedRaw, 10);
+      const vacantUnits = parseInt(vacantRaw, 10);
+
+      const renterPct =
+        totalTenure > 0 && !isNaN(renterCount)
+          ? Number(((renterCount / totalTenure) * 100).toFixed(1))
+          : null;
+      const ownerPct =
+        renterPct !== null ? Number((100 - renterPct).toFixed(1)) : null;
+      const totalUnits = (occupiedUnits || 0) + (vacantUnits || 0);
+      const vacancyPct =
+        totalUnits > 0 && !isNaN(vacantUnits)
+          ? Number(((vacantUnits / totalUnits) * 100).toFixed(1))
+          : null;
+
+      const out = {
+        medianGrossRent:
+          !isNaN(grossRent) && grossRent > 0 ? grossRent : undefined,
+        medianHomeValue: !isNaN(homeVal) && homeVal > 0 ? homeVal : undefined,
+        renterOccupancyPct: renterPct ?? undefined,
+        ownerOccupancyPct: ownerPct ?? undefined,
+        vacancyRatePct: vacancyPct ?? undefined,
+        source: censusApiKey
+          ? "Census ACS Housing API (Key)"
+          : "Census ACS Housing API",
+      };
+      cacheService.set(cacheKey, out);
+      return out;
+    }
+  } catch (err) {
+    console.warn(`Census Housing fallback for ${cityObj.state}:`, err.message);
+  }
+  return null;
+}
+
+/**
+ * 11. OpenStreetMap Nominatim Geocoding (Keyless Public API)
  */
 export async function geocodeCityNominatim(cityName, countryName) {
   const query = `${cityName}, ${countryName}`;

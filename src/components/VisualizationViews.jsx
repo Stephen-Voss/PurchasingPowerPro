@@ -14,7 +14,8 @@ import {
   Legend
 } from 'chart.js';
 import { Chart } from 'react-chartjs-2';
-import { MapContainer, TileLayer, CircleMarker, Popup } from 'react-leaflet';
+import { MapContainer, TileLayer, CircleMarker, Marker, Popup } from 'react-leaflet';
+import { divIcon } from 'leaflet';
 
 ChartJS.register(
   CategoryScale,
@@ -29,12 +30,52 @@ ChartJS.register(
   Legend
 );
 
-const fmtUSD = (val) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val);
+const fmtUSD = (val) => {
+  const num = Number(val);
+  if (!Number.isFinite(num)) return '$0';
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 0
+  }).format(num);
+};
+
+/**
+ * Builds a custom SVG House + Alert DivIcon colored with the city's buying-power fill color
+ */
+function createLowHousingDivIcon(fillColor, isBase) {
+  const size = isBase ? 30 : 26;
+  return divIcon({
+    className: 'low-housing-div-icon',
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+    popupAnchor: [0, -size / 2],
+    html: `
+      <div style="
+        width: ${size}px;
+        height: ${size}px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.65));
+      ">
+        <svg width="${size}" height="${size}" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M14 3L3 12.2H6.5V24H21.5V12.2H25L14 3Z" fill="${fillColor}" stroke="#0f172a" stroke-width="2.2" stroke-linejoin="round"/>
+          <path d="M14 10.5V16" stroke="#0f172a" stroke-width="2.3" stroke-linecap="round"/>
+          <circle cx="14" cy="19.5" r="1.4" fill="#0f172a"/>
+        </svg>
+      </div>
+    `
+  });
+}
 
 export function CostChartView({ cities, baseCity, targetSalary }) {
   const displayCities = cities.slice(0, 18);
-  const labels = displayCities.map((c) => `${c.city}, ${c.state}`);
+  const labels = displayCities.map(
+    (c) => `${c.city}, ${c.state}${c.housing?.isHousingUnderBudget ? ' ⚠ Low Housing' : ''}`
+  );
+
+  const underBudgetCount = displayCities.filter((c) => c.housing?.isHousingUnderBudget).length;
 
   const data = {
     labels,
@@ -152,29 +193,96 @@ export function CostChartView({ cities, baseCity, targetSalary }) {
       <div className="chart-wrapper">
         <Chart type="bar" data={data} options={options} />
       </div>
+      {underBudgetCount > 0 && (
+        <p className="viz-caption" style={{ color: '#fbbf24' }}>
+          ⚠ {underBudgetCount} shown {underBudgetCount === 1 ? 'city has' : 'cities have'} a housing budget allocation below the HUD Fair Market Rent / housing benchmark.
+        </p>
+      )}
     </div>
   );
 }
 
-export function CostMapView({ cities, baseCity, targetSalary, onInspectTax }) {
-  /**
-   * Colors each city marker dynamically relative to the Base City & Target Salary:
-   * - Cyan (#38bdf8): Base City
-   * - Green (#10b981): Stronger/Equal Buying Power (Equivalent salary needed <= Target Salary + 2%)
-   * - Amber (#f59e0b): Moderately Pricier (Needs +2% to +15% more salary than Base City)
-   * - Red (#ef4444): Significantly Pricier (Needs >15% more salary than Base City, or negative leftover)
-   */
+export function CostMapView({ cities, baseCity, targetSalary, onInspectTax, onInspectBudget }) {
   const getMarkerColor = (city) => {
     if (city.id === baseCity.id) return '#38bdf8';
     if (city.fixedSalary.leftover < 0) return '#ef4444';
 
     const salaryRatio = city.equivalentGrossNeeded / Math.max(1, targetSalary);
-    if (salaryRatio <= 1.02) return '#10b981'; // Cheaper or equal to Base City (e.g. Arkansas vs STL)
-    if (salaryRatio <= 1.15) return '#f59e0b'; // Up to 15% more expensive than Base City
-    return '#ef4444'; // Over 15% more expensive than Base City
+    if (salaryRatio <= 1.02) return '#10b981';
+    if (salaryRatio <= 1.15) return '#f59e0b';
+    return '#ef4444';
   };
 
   const moderateCutoff = Math.round(targetSalary * 1.15);
+
+  const renderPopupContent = (city, lowHousing) => {
+    const leftoverDiffVsBase = city.fixedSalary.leftover - baseCity.fixedSalary.leftover;
+    const h = city.housing;
+
+    return (
+      <Popup>
+        <div className="map-popup">
+          <h4>
+            {city.city}, {city.state} ({city.code})
+          </h4>
+          {lowHousing && (
+            <p style={{ color: '#b45309', fontWeight: 700, margin: '0.2rem 0' }}>
+              ⚠ Housing budget ({fmtUSD(city.fixedSalary.housingSpend)}/yr) is below{' '}
+              {fmtUSD(h?.recommendedAnnualHousingBenchmark)}/yr FMR benchmark!
+            </p>
+          )}
+          <p>
+            <strong>Salary Needed (vs {baseCity.code}):</strong> {fmtUSD(city.equivalentGrossNeeded)}
+          </p>
+          <p>
+            <strong>Leftover on {fmtUSD(targetSalary)}:</strong>{' '}
+            <span style={{ color: city.fixedSalary.leftover >= 0 ? '#059669' : '#dc2626', fontWeight: 700 }}>
+              {fmtUSD(city.fixedSalary.leftover)}/yr
+            </span>{' '}
+            {city.id !== baseCity.id && (
+              <small style={{ color: leftoverDiffVsBase >= 0 ? '#059669' : '#dc2626' }}>
+                ({leftoverDiffVsBase >= 0 ? `+${fmtUSD(leftoverDiffVsBase)}` : fmtUSD(leftoverDiffVsBase)} vs {baseCity.code})
+              </small>
+            )}
+          </p>
+          {h && (
+            <>
+              <p>
+                <strong>HUD 2-BR FMR:</strong> {fmtUSD(h.hudFairMarketRents?.br2)}/mo •{' '}
+                <strong>RentCast Med:</strong> {fmtUSD(h.rentcast?.medianRentMonthly)}/mo
+              </p>
+              <p>
+                <strong>Census Gross Rent / Home Val:</strong> {fmtUSD(h.censusHousing?.medianGrossRent)}/mo •{' '}
+                {fmtUSD(h.censusHousing?.medianHomeValue)}
+              </p>
+            </>
+          )}
+          <p>
+            <strong>Min Wage:</strong> ${Number(city.minWageHourly || 0).toFixed(2)}/hr •{' '}
+            <strong>Median:</strong> {fmtUSD(city.medianWageAnnual)}
+          </p>
+          <div style={{ display: 'flex', gap: '0.35rem', marginTop: '0.4rem' }}>
+            {onInspectBudget && (
+              <button
+                type="button"
+                className="popup-tax-btn"
+                onClick={() => onInspectBudget(city)}
+              >
+                Housing & Budget
+              </button>
+            )}
+            <button
+              type="button"
+              className="popup-tax-btn"
+              onClick={() => onInspectTax(city)}
+            >
+              Taxes ({city.fixedSalary.effectiveTaxRate}%)
+            </button>
+          </div>
+        </div>
+      </Popup>
+    );
+  };
 
   return (
     <div className="viz-card">
@@ -183,7 +291,7 @@ export function CostMapView({ cities, baseCity, targetSalary, onInspectTax }) {
           <i className="dot" style={{ background: '#38bdf8' }} /> Base City ({baseCity.city})
         </span>
         <span>
-          <i className="dot" style={{ background: '#10b981' }} /> Cheaper / Equal vs. {baseCity.code} (Need &le; {fmtUSD(targetSalary)})
+          <i className="dot" style={{ background: '#10b981' }} /> Cheaper / Equal vs. {baseCity.code} (Need ≤ {fmtUSD(targetSalary)})
         </span>
         <span>
           <i className="dot" style={{ background: '#f59e0b' }} /> Moderately Pricier (Need up to {fmtUSD(moderateCutoff)})
@@ -191,58 +299,51 @@ export function CostMapView({ cities, baseCity, targetSalary, onInspectTax }) {
         <span>
           <i className="dot" style={{ background: '#ef4444' }} /> High Cost (Need over {fmtUSD(moderateCutoff)})
         </span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+          <svg width="15" height="15" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+            <path d="M14 3L3 12.2H6.5V24H21.5V12.2H25L14 3Z" fill="#94a3b8" stroke="#0f172a" strokeWidth="2.2" strokeLinejoin="round" />
+            <path d="M14 10.5V16" stroke="#0f172a" strokeWidth="2.3" strokeLinecap="round" />
+            <circle cx="14" cy="19.5" r="1.4" fill="#0f172a" />
+          </svg>
+          <strong>House Alert Icon</strong> = Housing Budget Below FMR (Same Color Scale)
+        </span>
       </div>
       <div className="map-wrapper">
         <MapContainer center={[39.5, -96.5]} zoom={4} scrollWheelZoom={true} style={{ height: '100%', width: '100%' }}>
           <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
           {cities.map((city) => {
-            const leftoverDiffVsBase = city.fixedSalary.leftover - baseCity.fixedSalary.leftover;
+            const isBase = city.id === baseCity.id;
+            const lowHousing = Boolean(city.housing?.isHousingUnderBudget);
+            const markerColor = getMarkerColor(city);
+
+            if (lowHousing) {
+              return (
+                <Marker
+                  key={city.id}
+                  position={[city.lat, city.lng]}
+                  icon={createLowHousingDivIcon(markerColor, isBase)}
+                >
+                  {renderPopupContent(city, true)}
+                </Marker>
+              );
+            }
+
             return (
               <CircleMarker
                 key={city.id}
                 center={[city.lat, city.lng]}
-                radius={city.id === baseCity.id ? 10 : 7}
+                radius={isBase ? 10 : 7}
                 pathOptions={{
                   color: '#0f172a',
                   weight: 1.5,
-                  fillColor: getMarkerColor(city),
+                  fillColor: markerColor,
                   fillOpacity: 0.88
                 }}
               >
-                <Popup>
-                  <div className="map-popup">
-                    <h4>
-                      {city.city}, {city.state} ({city.code})
-                    </h4>
-                    <p>
-                      <strong>Salary Needed (vs {baseCity.code}):</strong> {fmtUSD(city.equivalentGrossNeeded)}
-                    </p>
-                    <p>
-                      <strong>Leftover on {fmtUSD(targetSalary)}:</strong>{' '}
-                      <span style={{ color: city.fixedSalary.leftover >= 0 ? '#059669' : '#dc2626', fontWeight: 700 }}>
-                        {fmtUSD(city.fixedSalary.leftover)}/yr
-                      </span>{' '}
-                      {city.id !== baseCity.id && (
-                        <small style={{ color: leftoverDiffVsBase >= 0 ? '#059669' : '#dc2626' }}>
-                          ({leftoverDiffVsBase >= 0 ? `+${fmtUSD(leftoverDiffVsBase)}` : fmtUSD(leftoverDiffVsBase)} vs {baseCity.code})
-                        </small>
-                      )}
-                    </p>
-                    <p>
-                      <strong>Min Wage:</strong> ${city.minWageHourly.toFixed(2)}/hr • <strong>Median:</strong> {fmtUSD(city.medianWageAnnual)}
-                    </p>
-                    <button
-                      type="button"
-                      className="popup-tax-btn"
-                      onClick={() => onInspectTax(city)}
-                    >
-                      Inspect {city.code} Taxes ({city.fixedSalary.effectiveTaxRate}%)
-                    </button>
-                  </div>
-                </Popup>
+                {renderPopupContent(city, false)}
               </CircleMarker>
             );
           })}

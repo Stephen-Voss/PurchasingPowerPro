@@ -14,17 +14,17 @@ import {
   Sliders,
   ShieldCheck,
   Share2,
-  Check,
-  Briefcase
+  Check
 } from 'lucide-react';
 import { DEFAULT_CITIES, INTERNATIONAL_PRESETS } from './data/citiesData';
-import { CAREER_PROFILES, CAREER_CATEGORIES, buildBaselineCareerMetrics } from './data/careerData';
+import { CAREER_PROFILES, buildBaselineCareerMetrics } from './data/careerData';
 import {
   evaluateCityMetrics,
   DEFAULT_TAX_PROFILE,
   DEFAULT_BUDGET_WEIGHTS
 } from './utils/costCalculator';
 import { evaluateCityCareerViability } from './utils/careerCalculator';
+import { evaluateCityHousingMetrics } from './utils/housingCalculator';
 import {
   getStoredApiKeys,
   saveApiKeys,
@@ -37,10 +37,14 @@ import {
   fetchAdzunaCareerData,
   fetchCareerOneStopData,
   fetchBLSLaborTimeSeries,
+  fetchRentCastMarketData,
+  fetchHudFairMarketRents,
+  fetchCensusHousingDemographics,
   geocodeCityNominatim
 } from './services/apiService';
 import { cacheService } from './services/cacheService';
-import { TrackedCitiesSelector } from './components/TrackedCitiesSelector';
+import { CityDropdownSelector } from './components/CityDropdownSelector';
+import { CareerDropdownSelector } from './components/CareerDropdownSelector';
 import { TaxAndBudgetControls } from './components/TaxAndBudgetControls';
 import { TaxBreakdownModal } from './components/TaxBreakdownModal';
 import { BudgetBreakdownModal } from './components/BudgetBreakdownModal';
@@ -50,16 +54,29 @@ import { CostChartView, CostMapView } from './components/VisualizationViews';
 import { CityTable } from './components/CityTable';
 import './App.css';
 
+const USER_PREFS_STORAGE_KEY = 'cost_tracker_user_prefs_v1';
+
 const clampNum = (val, min, max, fallback) => {
   const n = Number(val);
   if (Number.isNaN(n)) return fallback;
   return Math.min(max, Math.max(min, n));
 };
 
-function parseUrlQueryState(citiesList) {
-  const params = new URLSearchParams(window.location.search);
+function readStoredUserPrefs() {
+  try {
+    const raw = localStorage.getItem(USER_PREFS_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
 
-  const rawBase = (params.get('base') || '').trim();
+function resolveInitialAppState(citiesList) {
+  const params = new URLSearchParams(window.location.search);
+  const stored = readStoredUserPrefs();
+
+  // 1. Base City (URL ?base= > localStorage > STL)
+  const rawBase = (params.get('base') || stored?.baseCityCode || stored?.baseCityId || '').trim();
   let matchedCity = citiesList.find((c) => c.id === 'st--louis-mo') || citiesList[0];
   if (rawBase) {
     const q = rawBase.toLowerCase();
@@ -70,13 +87,21 @@ function parseUrlQueryState(citiesList) {
       matchedCity;
   }
 
-  const targetSalary = clampNum(params.get('salary'), 25000, 2000000, 150000);
+  // 2. Target Salary (URL ?salary= > localStorage > 150000)
+  const targetSalary = clampNum(
+    params.has('salary') ? params.get('salary') : stored?.targetSalary,
+    25000,
+    2000000,
+    150000
+  );
 
-  const rawRole = (params.get('role') || '').trim().toLowerCase();
+  // 3. Target Career (URL ?role= > localStorage > Software Engineer)
+  const rawRole = (params.get('role') || stored?.selectedCareerId || '').trim().toLowerCase();
   const matchedRole =
     CAREER_PROFILES.find((p) => p.id === rawRole || p.title.toLowerCase() === rawRole) ||
     CAREER_PROFILES[0];
 
+  // 4. Tracked Cities (URL ?tracked= > localStorage > Starter default)
   const rawTracked = (params.get('tracked') || '').trim();
   let initialTrackedIds = null;
   if (rawTracked === 'top1') {
@@ -93,6 +118,13 @@ function parseUrlQueryState(citiesList) {
     if (foundIds.length > 0) {
       initialTrackedIds = Array.from(new Set([matchedCity.id, ...foundIds]));
     }
+  } else if (Array.isArray(stored?.selectedCityIds) && stored.selectedCityIds.length > 0) {
+    const validIds = stored.selectedCityIds.filter((id) =>
+      citiesList.some((c) => c.id === id)
+    );
+    if (validIds.length > 0) {
+      initialTrackedIds = Array.from(new Set([matchedCity.id, ...validIds]));
+    }
   }
 
   if (!initialTrackedIds) {
@@ -108,14 +140,26 @@ function parseUrlQueryState(citiesList) {
     );
   }
 
-  const rawFiling = (params.get('filing') || '').toLowerCase();
+  // 5. Tax Profile (URL params > localStorage > DEFAULT_TAX_PROFILE)
+  const storedTax = stored?.taxProfile || {};
+  const rawFiling = (params.get('filing') || storedTax.filingStatus || '').toLowerCase();
   const filingStatus = ['single', 'married', 'hoh'].includes(rawFiling)
     ? rawFiling
     : DEFAULT_TAX_PROFILE.filingStatus;
-  const householdSize = clampNum(params.get('hh'), 1, 10, DEFAULT_TAX_PROFILE.householdSize);
-  const dependents = clampNum(params.get('dep'), 0, 8, DEFAULT_TAX_PROFILE.dependents);
+  const householdSize = clampNum(
+    params.has('hh') ? params.get('hh') : storedTax.householdSize,
+    1,
+    10,
+    DEFAULT_TAX_PROFILE.householdSize
+  );
+  const dependents = clampNum(
+    params.has('dep') ? params.get('dep') : storedTax.dependents,
+    0,
+    8,
+    DEFAULT_TAX_PROFILE.dependents
+  );
   const preTaxRetirementPct = clampNum(
-    params.get('retire'),
+    params.has('retire') ? params.get('retire') : storedTax.preTaxRetirementPct,
     0,
     25,
     DEFAULT_TAX_PROFILE.preTaxRetirementPct
@@ -129,7 +173,17 @@ function parseUrlQueryState(citiesList) {
     preTaxRetirementPct
   };
 
-  let budgetWeights = { ...DEFAULT_BUDGET_WEIGHTS };
+  // 6. Budget Weights (URL ?w= > localStorage > DEFAULT_BUDGET_WEIGHTS)
+  const storedW = stored?.budgetWeights || {};
+  let budgetWeights = {
+    housing: clampNum(storedW.housing, 2, 65, DEFAULT_BUDGET_WEIGHTS.housing),
+    food: clampNum(storedW.food, 2, 65, DEFAULT_BUDGET_WEIGHTS.food),
+    transportation: clampNum(storedW.transportation, 2, 65, DEFAULT_BUDGET_WEIGHTS.transportation),
+    utilities: clampNum(storedW.utilities, 2, 65, DEFAULT_BUDGET_WEIGHTS.utilities),
+    healthcare: clampNum(storedW.healthcare, 2, 65, DEFAULT_BUDGET_WEIGHTS.healthcare),
+    misc: clampNum(storedW.misc, 2, 65, DEFAULT_BUDGET_WEIGHTS.misc)
+  };
+
   const rawW = params.get('w');
   if (rawW) {
     const parts = rawW.split(',').map((n) => Number(n));
@@ -145,7 +199,14 @@ function parseUrlQueryState(citiesList) {
     }
   }
 
-  const activeView = params.get('view') === 'map' ? 'map' : 'chart';
+  // 7. View & Filter State
+  const activeView = params.has('view')
+    ? params.get('view') === 'map'
+      ? 'map'
+      : 'chart'
+    : stored?.activeView === 'map'
+    ? 'map'
+    : 'chart';
   const stateFilter = params.get('state') || 'ALL';
   const rankParam = params.get('rank');
   const rankFilter = ['ALL', 'TOP1', 'INTL'].includes(rankParam) ? rankParam : 'ALL';
@@ -197,36 +258,36 @@ export default function App() {
     return [...DEFAULT_CITIES, ...customList];
   });
 
-  const initialUrlState = useMemo(() => parseUrlQueryState(cities), []);
+  const initialState = useMemo(() => resolveInitialAppState(cities), []);
 
-  const [baseCityId, setBaseCityId] = useState(initialUrlState.baseCityId);
-  const [baseQueryInput, setBaseQueryInput] = useState(initialUrlState.baseQueryInput);
-  const [targetSalary, setTargetSalary] = useState(initialUrlState.targetSalary);
-  const [selectedCareerId, setSelectedCareerId] = useState(initialUrlState.selectedCareerId);
-  const [selectedCityIds, setSelectedCityIds] = useState(initialUrlState.selectedCityIds);
+  const [baseCityId, setBaseCityId] = useState(initialState.baseCityId);
+  const [baseQueryInput, setBaseQueryInput] = useState(initialState.baseQueryInput);
+  const [targetSalary, setTargetSalary] = useState(initialState.targetSalary);
+  const [selectedCareerId, setSelectedCareerId] = useState(initialState.selectedCareerId);
+  const [selectedCityIds, setSelectedCityIds] = useState(initialState.selectedCityIds);
 
   const [showTaxBudgetModal, setShowTaxBudgetModal] = useState(false);
-  const [taxProfile, setTaxProfile] = useState(initialUrlState.taxProfile);
-  const [budgetWeights, setBudgetWeights] = useState(initialUrlState.budgetWeights);
+  const [taxProfile, setTaxProfile] = useState(initialState.taxProfile);
+  const [budgetWeights, setBudgetWeights] = useState(initialState.budgetWeights);
 
   const deferredTaxProfile = useDeferredValue(taxProfile);
   const deferredBudgetWeights = useDeferredValue(budgetWeights);
   const deferredSalary = useDeferredValue(Number(targetSalary) || 150000);
   const deferredCareerId = useDeferredValue(selectedCareerId);
 
-  const [inspectedTaxCityId, setInspectedTaxCityId] = useState(initialUrlState.inspectedTaxCityId);
+  const [inspectedTaxCityId, setInspectedTaxCityId] = useState(initialState.inspectedTaxCityId);
   const [inspectedBudgetCityId, setInspectedBudgetCityId] = useState(
-    initialUrlState.inspectedBudgetCityId
+    initialState.inspectedBudgetCityId
   );
   const [inspectedCareerCityId, setInspectedCareerCityId] = useState(
-    initialUrlState.inspectedCareerCityId
+    initialState.inspectedCareerCityId
   );
   const [compareTargetCityId, setCompareTargetCityId] = useState(null);
-  const [activeView, setActiveView] = useState(initialUrlState.activeView);
+  const [activeView, setActiveView] = useState(initialState.activeView);
 
-  const [searchFilter, setSearchFilter] = useState(initialUrlState.searchFilter);
-  const [stateFilter, setStateFilter] = useState(initialUrlState.stateFilter);
-  const [rankFilter, setRankFilter] = useState(initialUrlState.rankFilter);
+  const [searchFilter, setSearchFilter] = useState(initialState.searchFilter);
+  const [stateFilter, setStateFilter] = useState(initialState.stateFilter);
+  const [rankFilter, setRankFilter] = useState(initialState.rankFilter);
 
   const [linkCopied, setLinkCopied] = useState(false);
 
@@ -234,8 +295,9 @@ export default function App() {
   const [apiKeys, setApiKeys] = useState(getStoredApiKeys);
   const [liveTaxOverrides, setLiveTaxOverrides] = useState({});
   const [liveCareerOverrides, setLiveCareerOverrides] = useState({});
+  const [liveHousingOverrides, setLiveHousingOverrides] = useState({});
   const [syncStatus, setSyncStatus] = useState(
-    'Public Demo Engine Active (2026 BEA RPP + Tax + Keyless US Census ACS + Career LMI)'
+    'Public Demo Engine Active (2026 BEA RPP + Tax + Housing FMR/ACS + Career LMI)'
   );
   const [isSyncing, setIsSyncing] = useState(false);
   const [cacheStats, setCacheStats] = useState(() => cacheService.getSummary());
@@ -264,7 +326,7 @@ export default function App() {
 
   useEffect(() => {
     const handlePopState = () => {
-      const parsed = parseUrlQueryState(cities);
+      const parsed = resolveInitialAppState(cities);
       setBaseCityId(parsed.baseCityId);
       setBaseQueryInput(parsed.baseQueryInput);
       setTargetSalary(parsed.targetSalary);
@@ -308,7 +370,7 @@ export default function App() {
     applyCensusWages().then((ok) => {
       if (!mounted) return;
       if (ok) {
-        setSyncStatus('Public Demo Active: Live US Census ACS Wages + 2026 BEA RPP + Career LMI');
+        setSyncStatus('Public Demo Active: Live US Census ACS Wages + 2026 BEA RPP + Housing & Career');
       }
     });
     return () => {
@@ -326,8 +388,7 @@ export default function App() {
     return [baseCityRaw.id, ...selectedCityIds];
   }, [selectedCityIds, baseCityRaw.id]);
 
-  // Hydrate any cached API entries from localStorage whenever tracked cities or career/salary change
-  // without making outbound network API calls.
+  // Hydrate cached API entries from localStorage without making outbound network calls
   useEffect(() => {
     const trackedSet = new Set(effectiveTrackedIds);
     const trackedObjs = cities.filter((c) => trackedSet.has(c.id));
@@ -342,6 +403,7 @@ export default function App() {
     const cachedIndexUpdates = {};
     const cachedTaxUpdates = {};
     const cachedCareerUpdates = {};
+    const cachedHousingUpdates = {};
     let restoredAny = false;
 
     for (const cityObj of trackedObjs) {
@@ -390,6 +452,21 @@ export default function App() {
         };
         restoredAny = true;
       }
+
+      const rcCached = cacheService.get(`rentcast_market_${cityObj.id}`);
+      const hudCached = cacheService.get(`hud_fmr_il_${cityObj.state}`);
+      const cenCached = cityObj.censusStateFips
+        ? cacheService.get(`census_housing_${cityObj.censusStateFips}`)
+        : null;
+
+      if (rcCached || hudCached || cenCached) {
+        cachedHousingUpdates[cityObj.id] = {
+          rentcast: rcCached,
+          hud: hudCached,
+          census: cenCached
+        };
+        restoredAny = true;
+      }
     }
 
     if (Object.keys(cachedIndexUpdates).length > 0) {
@@ -403,12 +480,34 @@ export default function App() {
     if (Object.keys(cachedCareerUpdates).length > 0) {
       setLiveCareerOverrides((prev) => ({ ...prev, ...cachedCareerUpdates }));
     }
+    if (Object.keys(cachedHousingUpdates).length > 0) {
+      setLiveHousingOverrides((prev) => ({ ...prev, ...cachedHousingUpdates }));
+    }
     if (restoredAny) {
       setCacheStats(cacheService.getSummary());
     }
   }, [effectiveTrackedIds, cities, targetSalary, taxProfile.filingStatus, activeCareerProfile]);
 
+  // Persist Tracked Cities, Budget Weights, Tax Profile, Base City & Salary to BOTH localStorage and URL
   useEffect(() => {
+    try {
+      localStorage.setItem(
+        USER_PREFS_STORAGE_KEY,
+        JSON.stringify({
+          baseCityId: baseCityRaw.id,
+          baseCityCode: baseCityRaw.code,
+          targetSalary: deferredSalary,
+          selectedCareerId: deferredCareerId,
+          selectedCityIds: effectiveTrackedIds,
+          taxProfile: deferredTaxProfile,
+          budgetWeights: deferredBudgetWeights,
+          activeView
+        })
+      );
+    } catch {
+      // Ignore storage quota errors
+    }
+
     const params = new URLSearchParams();
     params.set('base', baseCityRaw.code);
     params.set('salary', String(deferredSalary));
@@ -416,13 +515,21 @@ export default function App() {
       params.set('role', deferredCareerId);
     }
 
+    const top1Ids = cities
+      .filter((c) => c.popRankInState === 1 || c.id === baseCityRaw.id)
+      .map((c) => c.id);
+    const isTop1Preset =
+      effectiveTrackedIds.length === top1Ids.length &&
+      top1Ids.every((id) => effectiveTrackedIds.includes(id));
+
     if (effectiveTrackedIds.length === cities.length) {
       params.set('tracked', 'all');
+    } else if (isTop1Preset) {
+      params.set('tracked', 'top1');
     } else {
       const codes = cities
         .filter((c) => effectiveTrackedIds.includes(c.id))
-        .map((c) => c.code)
-        .slice(0, 25);
+        .map((c) => c.code);
       if (codes.length > 0) params.set('tracked', codes.join(','));
     }
 
@@ -534,9 +641,17 @@ export default function App() {
         costEval.equivalentGrossNeeded,
         liveCareerOverrides[careerKey]
       );
+      const housingEval = evaluateCityHousingMetrics(
+        c,
+        costEval.fixedSalary.housingSpend,
+        deferredTaxProfile.householdSize,
+        careerEval.roleMedianSalary,
+        liveHousingOverrides[c.id]
+      );
       return {
         ...costEval,
-        career: careerEval
+        career: careerEval,
+        housing: housingEval
       };
     });
   }, [
@@ -547,7 +662,8 @@ export default function App() {
     deferredBudgetWeights,
     liveTaxOverrides,
     activeCareerProfile,
-    liveCareerOverrides
+    liveCareerOverrides,
+    liveHousingOverrides
   ]);
 
   const baseCityEvaluated = useMemo(
@@ -555,7 +671,6 @@ export default function App() {
     [evaluatedCities, baseCityRaw]
   );
 
-  // Cities explicitly selected in Tracked Cities selector (used by Chart, Map, and Table)
   const trackedVizCities = useMemo(() => {
     const trackedSet = new Set(effectiveTrackedIds);
     return evaluatedCities.filter((c) => trackedSet.has(c.id));
@@ -601,7 +716,6 @@ export default function App() {
     }
   };
 
-  // Table displays ONLY tracked cities (filtered by optional search/state/rank within tracked set)
   const filteredTrackedTableCities = useMemo(() => {
     return trackedVizCities.filter((c) => {
       if (stateFilter !== 'ALL' && c.state !== stateFilter) return false;
@@ -624,23 +738,33 @@ export default function App() {
 
     if (!hasCustomApiKeys(apiKeys)) {
       setCacheStats(cacheService.getSummary());
-      setSyncStatus('Synced Keyless US Census ACS + Default 2026 BEA RPP & Career LMI');
+      setSyncStatus('Synced Keyless US Census ACS + Default 2026 BEA RPP & Housing/Career');
       setIsSyncing(false);
       return;
     }
 
-    // Only query APIs for user-tracked cities (each fetcher checks cacheService first)
-    const batch = trackedVizCities.slice(0, 10);
+    const batch = trackedVizCities.slice(0, 8);
     let updatedCount = 0;
 
     const updatedCitiesMap = {};
     const newTaxOverrides = { ...liveTaxOverrides };
     const newCareerOverrides = { ...liveCareerOverrides };
+    const newHousingOverrides = { ...liveHousingOverrides };
 
     for (const cityObj of batch) {
       const baselineCareer = buildBaselineCareerMetrics(cityObj, activeCareerProfile);
 
-      const [apvData, beaData, taxData, adzunaData, cosData, blsData] = await Promise.all([
+      const [
+        apvData,
+        beaData,
+        taxData,
+        adzunaData,
+        cosData,
+        blsData,
+        rcData,
+        hudData,
+        cenHousingData
+      ] = await Promise.all([
         fetchAPVerveColIndex(cityObj, apiKeys.apverve),
         fetchBEARegionalParity(cityObj, apiKeys.bea),
         fetchAPINinjasTax(cityObj, targetSalary, taxProfile.filingStatus, apiKeys.apininjas),
@@ -656,7 +780,10 @@ export default function App() {
           activeCareerProfile,
           apiKeys.blsApiKey,
           baselineCareer.blsMeta.oewsSeriesId
-        )
+        ),
+        fetchRentCastMarketData(cityObj, apiKeys.rentcast),
+        fetchHudFairMarketRents(cityObj, apiKeys.hudUserToken),
+        fetchCensusHousingDemographics(cityObj, apiKeys.censusApiKey)
       ]);
 
       if (apvData) {
@@ -690,6 +817,15 @@ export default function App() {
         };
         updatedCount++;
       }
+
+      if (rcData || hudData || cenHousingData) {
+        newHousingOverrides[cityObj.id] = {
+          rentcast: rcData,
+          hud: hudData,
+          census: cenHousingData
+        };
+        updatedCount++;
+      }
     }
 
     if (Object.keys(updatedCitiesMap).length > 0) {
@@ -699,11 +835,12 @@ export default function App() {
     }
     setLiveTaxOverrides(newTaxOverrides);
     setLiveCareerOverrides(newCareerOverrides);
+    setLiveHousingOverrides(newHousingOverrides);
     setCacheStats(cacheService.getSummary());
     setSyncStatus(
       updatedCount > 0
         ? `BYOK Live Sync (${batch.length} tracked cities): Updated ${updatedCount} results (Cached)`
-        : 'Keyless US Census ACS + Default 2026 BEA RPP & Career LMI Active'
+        : 'Keyless US Census ACS + Default 2026 BEA RPP & Housing/Career Active'
     );
     setIsSyncing(false);
   };
@@ -815,7 +952,7 @@ export default function App() {
               </span>
             </div>
             <p className="subtitle">
-              150 U.S. Cities + London • Cost, Tax, Career Viability (Adzuna, CareerOneStop &amp; BLS)
+              150+ U.S. Cities & D.C. + London • Cost, Tax, Housing (RentCast, HUD & Census) & Career LMI
             </p>
           </div>
           <div className="header-actions">
@@ -823,7 +960,7 @@ export default function App() {
               type="button"
               className={linkCopied ? 'btn-primary' : 'btn-secondary'}
               onClick={handleShareComparisonLink}
-              title="Copy shareable URL with your current Base City, profession, salary, tax profile, and budget weights"
+              title="Copy shareable URL with your current Base City, tracked cities, profession, salary, tax profile, and budget weights"
             >
               {linkCopied ? <Check size={15} /> : <Share2 size={15} />}
               <span>{linkCopied ? 'Copied Share Link!' : 'Share Link'}</span>
@@ -832,7 +969,7 @@ export default function App() {
               <Globe size={15} /> <span>+ International City</span>
             </button>
             <button type="button" className="btn-secondary" onClick={() => setShowApiDrawer(!showApiDrawer)}>
-              <KeyRound size={15} /> <span>BYOK APIs &amp; Cache ({cacheStats.entries})</span>
+              <KeyRound size={15} /> <span>BYOK APIs & Cache ({cacheStats.entries})</span>
             </button>
           </div>
         </div>
@@ -842,7 +979,7 @@ export default function App() {
         {showApiDrawer && (
           <section className="api-drawer">
             <p className="helper-note" style={{ marginTop: 0, marginBottom: '0.85rem', color: '#cbd5e1' }}>
-              <strong>GitHub Pages Public Demo Security:</strong> No API keys are bundled with this site. Keys entered below are saved strictly in your browser&apos;s <code>localStorage</code> and cached for 7 days. See <code>API_KEYS_GUIDE.md</code> for instructions on obtaining each key.
+              <strong>GitHub Pages Public Demo Security:</strong> No API keys are bundled with this site. Keys entered below are saved strictly in your browser's <code>localStorage</code> and cached for 7 days. See <code>API_KEYS_GUIDE.md</code> for instructions on obtaining each key.
             </p>
             <div className="api-grid">
               <div>
@@ -870,6 +1007,33 @@ export default function App() {
                   placeholder="Optional 36-char BEA UserID..."
                   value={apiKeys.bea}
                   onChange={(e) => setApiKeys({ ...apiKeys, bea: e.target.value })}
+                />
+              </div>
+              <div>
+                <label>RentCast API Key (Rents & Market)</label>
+                <input
+                  type="password"
+                  placeholder="Optional RentCast X-Api-Key..."
+                  value={apiKeys.rentcast}
+                  onChange={(e) => setApiKeys({ ...apiKeys, rentcast: e.target.value })}
+                />
+              </div>
+              <div>
+                <label>HUD User Bearer Token (FMR & IL)</label>
+                <input
+                  type="password"
+                  placeholder="Optional HUD User token..."
+                  value={apiKeys.hudUserToken}
+                  onChange={(e) => setApiKeys({ ...apiKeys, hudUserToken: e.target.value })}
+                />
+              </div>
+              <div>
+                <label>U.S. Census API Key (ACS Housing)</label>
+                <input
+                  type="password"
+                  placeholder="Optional Census API key..."
+                  value={apiKeys.censusApiKey}
+                  onChange={(e) => setApiKeys({ ...apiKeys, censusApiKey: e.target.value })}
                 />
               </div>
               <div>
@@ -909,7 +1073,7 @@ export default function App() {
                 />
               </div>
               <div>
-                <label>BLS API v2 Key (OEWS &amp; LAUS)</label>
+                <label>BLS API v2 Key (OEWS & LAUS)</label>
                 <input
                   type="password"
                   placeholder="Optional BLS registration key..."
@@ -939,12 +1103,13 @@ export default function App() {
                     setApiKeys(getStoredApiKeys());
                     setLiveCareerOverrides({});
                     setLiveTaxOverrides({});
+                    setLiveHousingOverrides({});
                     cacheService.clearAll();
                     setCacheStats(cacheService.getSummary());
                     setSyncStatus('Reset to Public Demo Defaults (Zero-Key Engine)');
                   }}
                 >
-                  <Trash2 size={15} /> Clear Keys &amp; Cache
+                  <Trash2 size={15} /> Clear Keys & Cache
                 </button>
               </div>
             </div>
@@ -965,23 +1130,18 @@ export default function App() {
                 placeholder="STL"
                 className="code-input"
               />
-              <select
-                value={baseCityEvaluated.id}
-                onChange={(e) => {
-                  setBaseCityId(e.target.value);
-                  const found = cities.find((c) => c.id === e.target.value);
-                  if (found) setBaseQueryInput(found.code);
+              <CityDropdownSelector
+                mode="single"
+                allCities={cities}
+                baseCityId={baseCityEvaluated.id}
+                onSelectSingleCity={(cityObj) => {
+                  setBaseCityId(cityObj.id);
+                  setBaseQueryInput(cityObj.code);
                   setSelectedCityIds((prev) =>
-                    prev.includes(e.target.value) ? prev : [e.target.value, ...prev]
+                    prev.includes(cityObj.id) ? prev : [cityObj.id, ...prev]
                   );
                 }}
-              >
-                {cities.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.city}, {c.state} ({c.code}) — RPP {c.indices.overall}
-                  </option>
-                ))}
-              </select>
+              />
             </div>
           </div>
 
@@ -1000,49 +1160,33 @@ export default function App() {
             />
           </div>
 
-          <div className="control-group">
-            <label>
-              <Briefcase size={14} /> Target Career / Profession
-            </label>
-            <select
-              value={selectedCareerId}
-              onChange={(e) => setSelectedCareerId(e.target.value)}
-              className="career-select"
-            >
-              {CAREER_CATEGORIES.map((categoryName) => {
-                const rolesInCategory = CAREER_PROFILES.filter(
-                  (prof) => prof.category === categoryName
-                );
-                if (rolesInCategory.length === 0) return null;
-                return (
-                  <optgroup key={categoryName} label={categoryName}>
-                    {rolesInCategory.map((prof) => (
-                      <option key={prof.id} value={prof.id}>
-                        {prof.title} (SOC {prof.socCode})
-                      </option>
-                    ))}
-                  </optgroup>
-                );
-              })}
-            </select>
-          </div>
-
-          <TrackedCitiesSelector
-            allCities={cities}
-            selectedCityIds={effectiveTrackedIds}
-            onChangeSelectedCityIds={setSelectedCityIds}
-            baseCityId={baseCityEvaluated.id}
+          <CareerDropdownSelector
+            selectedCareerId={selectedCareerId}
+            onChangeCareerId={setSelectedCareerId}
           />
 
+          <div className="control-group">
+            <label>
+              <MapPin size={14} /> Tracked Cities ({effectiveTrackedIds.length} of {cities.length} — Chart & Map)
+            </label>
+            <CityDropdownSelector
+              mode="multi"
+              allCities={cities}
+              selectedCityIds={effectiveTrackedIds}
+              onChangeSelectedCityIds={setSelectedCityIds}
+              baseCityId={baseCityEvaluated.id}
+            />
+          </div>
+
           <div className="control-group customize-trigger-group">
-            <label>Tax &amp; Budget Weights</label>
+            <label>Tax & Budget Weights</label>
             <button
               type="button"
               className="btn-secondary customize-modal-btn"
               onClick={() => setShowTaxBudgetModal(true)}
             >
               <Sliders size={15} />
-              <span>Customize Tax &amp; Budget</span>
+              <span>Customize Tax & Budget</span>
             </button>
           </div>
         </section>
@@ -1076,7 +1220,7 @@ export default function App() {
             </div>
 
             <select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)}>
-              <option value="ALL">Tracked States &amp; UK ({trackedVizCities.length} Cities)</option>
+              <option value="ALL">Tracked States & UK ({trackedVizCities.length} Cities)</option>
               {uniqueStates.map((st) => (
                 <option key={st} value={st}>
                   State / Region: {st}
@@ -1105,13 +1249,13 @@ export default function App() {
             baseCity={baseCityEvaluated}
             targetSalary={deferredSalary}
             onInspectTax={(cityObj) => setInspectedTaxCityId(cityObj.id)}
+            onInspectBudget={(cityObj) => setInspectedBudgetCityId(cityObj.id)}
           />
         )}
 
-        {/* Table Displays ONLY Tracked Cities (Using Cached Data When Tracked Cities Change) */}
+        {/* Table Displays ONLY Tracked Cities */}
         <CityTable
           cities={filteredTrackedTableCities}
-          totalTrackedCount={trackedVizCities.length}
           baseCity={baseCityEvaluated}
           targetSalary={deferredSalary}
           onCompareCity={(cityObj) => setCompareTargetCityId(cityObj.id)}
@@ -1245,7 +1389,7 @@ export default function App() {
                   Cancel
                 </button>
                 <button type="submit" className="btn-primary">
-                  Geocode &amp; Add City
+                  Geocode & Add City
                 </button>
               </div>
             </form>

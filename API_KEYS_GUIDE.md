@@ -101,3 +101,51 @@ If you want to connect live data from **APVerve**, **API Ninjas**, **BEA**, **Ad
 
 - Keep your local `.env` file untracked (already included in `.gitignore`).
 - On public GitHub Pages deployments, visitors can optionally paste their own keys into the **BYOK APIs & Cache** drawer, which writes only to that visitor's local browser storage.
+
+# API Keys Retrieval Guide — PurchasingPower Pro
+
+PurchasingPower Pro runs out of the box on GitHub Pages with **zero API keys required** using embedded 2026 BEA Regional Price Parities (RPP), progressive U.S./UK tax tables, career labor baselines, housing baselines, and keyless public endpoints (**U.S. Census Bureau ACS** and **OpenStreetMap Nominatim**).
+
+---
+
+## 1. Keyless Public APIs (No Key Required)
+
+- **U.S. Census Bureau ACS API**: Dynamic median earnings/incomes (`B20017_001E`, `B19013_001E`) and housing demographics (`B25064_001E`, `B25077_001E`, `B25003_001E`, `B25003_003E`, `B25002_002E`, `B25002_003E`, `B08013_001E`). Works without a key; optional key signup at `https://api.census.gov/data/key_signup.html`.
+- **OpenStreetMap Nominatim Geocoding API**: Geocodes custom international cities added in the **+ International City** modal.
+
+---
+
+## 2. Housing & Rent APIs
+
+### RentCast API (Average/Median Rents, Home Sale Prices, DOM, Listings & Trends)
+
+- **Developer Portal**: `https://developers.rentcast.io/` (`/v1/markets` — 50 free calls/month)
+- **How to Retrieve**: Sign up at RentCast, open your API dashboard, and copy your `X-Api-Key`.
+- **App / `.env`**: UI **RentCast API Key** or `.env` `VITE_RENTCAST_API_KEY`.
+
+### HUD User API (Fair Market Rents 0–4 BR & Income Limits)
+
+- **Developer Portal**: `https://www.huduser.gov/hudapi/public/register` (Docs: `https://www.huduser.gov/portal/dataset/fmr-api.html`)
+- **How to Retrieve**: Register for a HUD User account, select the Fair Market Rents & Income Limits APIs, confirm your email, and generate a **Bearer Token** in your account portal.
+- **App / `.env`**: UI **HUD User Bearer Token** or `.env` `VITE_HUD_USER_TOKEN`.
+
+### U.S. Census Bureau ACS Housing Key
+
+- **Signup Page**: `https://api.census.gov/data/key_signup.html`
+- **App / `.env`**: UI **U.S. Census API Key** or `.env` `VITE_CENSUS_API_KEY`.
+
+---
+
+## 3. Cost of Living & Tax APIs
+
+- **APVerve Cost of Living API**: `https://apiverve.com` → UI **APVerve Key** / `.env` `VITE_APVERVE_API_KEY`.
+- **BEA Regional Price Parities (RPP) API**: `https://apps.bea.gov/api/signup/` → UI **BEA UserID Key** / `.env` `VITE_BEA_API_KEY`.
+- **API Ninjas Income Tax Calculator API**: `https://api-ninjas.com/register` → UI **API Ninjas Key** / `.env` `VITE_APININJAS_API_KEY`.
+
+---
+
+## 4. Job Aggregator & Official Labor Market APIs
+
+- **Adzuna Job Search API**: `https://developer.adzuna.com/` → UI **Adzuna App ID** & **Adzuna App Key** / `.env` `VITE_ADZUNA_APP_ID` & `VITE_ADZUNA_APP_KEY`.
+- **CareerOneStop Web API**: `https://www.careeronestop.org/Developers/WebAPI/web-api.aspx` → UI **CareerOneStop User ID** & **CareerOneStop API Token** / `.env` `VITE_CAREERONESTOP_USER_ID` & `VITE_CAREERONESTOP_TOKEN`.
+- **BLS Public Data API v2 (OEWS & LAUS)**: `https://data.bls.gov/registrationEngine/` → UI **BLS API v2 Key** / `.env` `VITE_BLS_API_KEY`.

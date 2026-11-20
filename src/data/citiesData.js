@@ -1,9 +1,9 @@
 // src/data/citiesData.js
 
-// State profiles:
+// State & District profiles:
 // rpp: [overall, housing, food, transportation, utilities, healthcare, misc]
-// minWage: 2026 effective state minimum wage ($/hr, defaults to $7.25 federal floor where state has no higher mandate)
-// medianWage: Baseline state median full-time annual earnings (dynamically updated via US Census ACS API)
+// minWage: Effective minimum wage ($/hr)
+// medianWage: Baseline median full-time annual earnings (dynamically updated via US Census ACS API)
 export const STATE_PROFILES = {
   AL: {
     name: "Alabama",
@@ -60,6 +60,14 @@ export const STATE_PROFILES = {
     minWage: 16.35,
     medianWage: 73100,
     fips: "09",
+  },
+  DC: {
+    name: "District of Columbia",
+    rpp: [112.4, 146.5, 103.8, 112.0, 108.5, 105.2, 104.6],
+    stateTaxRate: 0.065,
+    minWage: 17.5,
+    medianWage: 86500,
+    fips: "11",
   },
   DE: {
     name: "Delaware",
@@ -410,9 +418,11 @@ export const STATE_PROFILES = {
 // City-specific municipal minimum wage overrides ($/hr) and local municipal wage tax rates
 const CITY_OVERRIDES = {
   SEA: { minWage: 20.76, localTaxRate: 0.0 },
+  SFO: { minWage: 18.67, localTaxRate: 0.0 },
   SJC: { minWage: 17.95, localTaxRate: 0.0 },
   LAX: { minWage: 17.28, localTaxRate: 0.0 },
   SAN: { minWage: 17.25, localTaxRate: 0.0 },
+  DCA: { minWage: 17.5, localTaxRate: 0.0 },
   DEN: { minWage: 18.81, localTaxRate: 0.0 },
   NYC: { minWage: 16.5, localTaxRate: 0.0365 },
   YNK: { minWage: 16.5, localTaxRate: 0.0195 },
@@ -443,7 +453,7 @@ const CITY_OVERRIDES = {
   FWA: { minWage: 7.25, localTaxRate: 0.0159 },
 };
 
-// Top 3 most populated cities for all 50 US states: [CityName, lat, lng, cityMetroMultiplier, aliasCode]
+// Top populated cities per state/district plus San Francisco & Austin
 const RAW_STATE_CITIES = {
   AL: [
     ["Huntsville", 34.7304, -86.5861, 1.04, "HSV"],
@@ -469,6 +479,7 @@ const RAW_STATE_CITIES = {
     ["Los Angeles", 34.0522, -118.2437, 1.12, "LAX"],
     ["San Diego", 32.7157, -117.1611, 1.1, "SAN"],
     ["San Jose", 37.3382, -121.8863, 1.24, "SJC"],
+    ["San Francisco", 37.7749, -122.4194, 1.28, "SFO"],
   ],
   CO: [
     ["Denver", 39.7392, -104.9903, 1.07, "DEN"],
@@ -480,6 +491,7 @@ const RAW_STATE_CITIES = {
     ["Stamford", 41.0534, -73.5387, 1.16, "STM"],
     ["New Haven", 41.3083, -72.9279, 1.01, "HVN"],
   ],
+  DC: [["Washington, D.C.", 38.9072, -77.0369, 1.18, "DCA"]],
   DE: [
     ["Wilmington", 39.7447, -75.5484, 1.03, "ILG"],
     ["Dover", 39.1582, -75.5244, 0.96, "DOV"],
@@ -659,6 +671,7 @@ const RAW_STATE_CITIES = {
     ["Houston", 29.7604, -95.3698, 1.02, "HOU"],
     ["San Antonio", 29.4241, -98.4936, 0.96, "SAT"],
     ["Dallas", 32.7767, -96.797, 1.05, "DFW"],
+    ["Austin", 30.2672, -97.7431, 1.08, "AUS"],
   ],
   UT: [
     ["Salt Lake City", 40.7608, -111.891, 1.06, "SLC"],
@@ -776,8 +789,8 @@ export const DEFAULT_CITIES = [
     censusStateFips: null,
     stateTaxRate: 0.0,
     localTaxRate: 0.0,
-    minWageHourly: 17.65, // London Living Wage (~£13.85/hr in USD)
-    medianWageAnnual: 61500, // ONS London median full-time salary in USD
+    minWageHourly: 17.65,
+    medianWageAnnual: 61500,
     wageSource: "UK ONS + Living Wage Foundation",
     indices: {
       overall: 126.4,
